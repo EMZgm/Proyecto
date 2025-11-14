@@ -1,7 +1,9 @@
-require('dotenv').config(); // Carga el archivo .env
+require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
+const bcrypt = require('bcrypt'); // Para hashear contraseñas
+const jwt = require('jsonwebtoken'); // Para crear tokens
 
 const app = express();
 const port = 3001;
@@ -19,21 +21,119 @@ const pool = new Pool({
   port: process.env.DB_PORT,
 });
 
-// Probar conexión
-pool.query('SELECT NOW()', (err, res) => {
-  if (err) {
-    console.error('Error al conectar con la base de datos', err.stack);
-  } else {
-    console.log('Conexión a la DB (Gastos) exitosa en:', res.rows[0].now);
+// ===========================================
+// ==  NUEVO: ENDPOINTS DE AUTENTICACIÓN  ==
+// ===========================================
+
+// --- REGISTRO DE USUARIO ---
+app.post('/register', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email y contraseña son obligatorios' });
+    }
+
+    // Hashear la contraseña
+    const salt = await bcrypt.genSalt(10);
+    const password_hash = await bcrypt.hash(password, salt);
+
+    // Guardar en la base de datos
+    const newUser = await pool.query(
+      'INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email',
+      [email, password_hash]
+    );
+
+    res.status(201).json(newUser.rows[0]);
+
+  } catch (err) {
+    // Manejar error de "email ya existe" (código 23505 en Postgres)
+    if (err.code === '23505') {
+      return res.status(400).json({ error: 'El email ya está registrado' });
+    }
+    console.error(err.message);
+    res.status(500).json({ error: 'Error en el servidor' });
   }
 });
 
-// --- API Endpoints para Gastos ---
-
-// GET /expenses (Obtener todos los gastos)
-app.get('/expenses', async (req, res) => {
+// --- LOGIN DE USUARIO ---
+app.post('/login', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM expenses ORDER BY created_at DESC');
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email y contraseña son obligatorios' });
+    }
+
+    // 1. Buscar al usuario
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    const user = result.rows[0];
+    if (!user) {
+      return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
+
+    // 2. Comparar la contraseña
+    const isMatch = await bcrypt.compare(password, user.password_hash);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Credenciales inválidas' });
+    }
+
+    // 3. Crear el token (JWT)
+    const tokenPayload = { userId: user.id, email: user.email };
+    const token = jwt.sign(
+      tokenPayload, 
+      process.env.JWT_SECRET, 
+      { expiresIn: '1h' } // El token expira en 1 hora
+    );
+
+    res.json({ token, user: { id: user.id, email: user.email } });
+
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ error: 'Error en el servidor' });
+  }
+});
+
+// ===========================================
+// ==  NUEVO: MIDDLEWARE DE AUTENTICACIÓN  ==
+// ===========================================
+
+// Esta función revisará el token en CADA petición protegida
+const authenticateToken = (req, res, next) => {
+  // El token viene en el header: 'Authorization: Bearer <TOKEN>'
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (token == null) {
+    return res.status(401).json({ error: 'Token no provisto' }); // No hay token
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET, (err, userPayload) => {
+    if (err) {
+      return res.status(403).json({ error: 'Token inválido' }); // Token expiró o es falso
+    }
+
+    // Si el token es válido, guardamos los datos del usuario en 'req'
+    // para usarlo en las siguientes funciones
+    req.user = userPayload; 
+    next(); // Permite que la petición continúe
+  });
+};
+
+
+// ==================================================
+// ==  MODIFICADO: API Endpoints para Gastos (Ahora protegidos)  ==
+// ==================================================
+
+// --- OBTENER GASTOS (Solo los del usuario logueado) ---
+//     Añadimos 'authenticateToken' antes de la función
+app.get('/expenses', authenticateToken, async (req, res) => {
+  try {
+    // Obtenemos el ID del usuario desde el token (que el middleware puso en req.user)
+    const userId = req.user.userId;
+
+    const result = await pool.query(
+      'SELECT * FROM expenses WHERE user_id = $1 ORDER BY created_at DESC',
+      [userId]
+    );
     res.json(result.rows);
   } catch (err) {
     console.error(err.message);
@@ -41,14 +141,14 @@ app.get('/expenses', async (req, res) => {
   }
 });
 
-// POST /expenses (Crear un nuevo gasto)
-app.post('/expenses', async (req, res) => {
+// --- CREAR GASTO (Asignado al usuario logueado) ---
+app.post('/expenses', authenticateToken, async (req, res) => {
   try {
+    const userId = req.user.userId;
     const { description, amount, category } = req.body;
 
-    // Validación
     if (!description || !amount) {
-      return res.status(400).json({ error: 'La descripción y el monto son obligatorios' });
+      return res.status(400).json({ error: 'Descripción y monto son obligatorios' });
     }
     const parsedAmount = parseFloat(amount);
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
@@ -56,8 +156,8 @@ app.post('/expenses', async (req, res) => {
     }
 
     const newExpense = await pool.query(
-      'INSERT INTO expenses (description, amount, category) VALUES ($1, $2, $3) RETURNING *',
-      [description, parsedAmount, category]
+      'INSERT INTO expenses (description, amount, category, user_id) VALUES ($1, $2, $3, $4) RETURNING *',
+      [description, parsedAmount, category, userId] // Añadimos userId
     );
 
     res.status(201).json(newExpense.rows[0]);
@@ -67,14 +167,21 @@ app.post('/expenses', async (req, res) => {
   }
 });
 
-// DELETE /expenses/:id (Borrar un gasto)
-app.delete('/expenses/:id', async (req, res) => {
+// --- BORRAR GASTO (Solo si pertenece al usuario logueado) ---
+app.delete('/expenses/:id', authenticateToken, async (req, res) => {
   try {
+    const userId = req.user.userId;
     const { id } = req.params;
-    const deleteOp = await pool.query('DELETE FROM expenses WHERE id = $1 RETURNING *', [id]);
+
+    // Modificamos el query para ASEGURARNOS que el usuario solo borra sus propios gastos
+    const deleteOp = await pool.query(
+      'DELETE FROM expenses WHERE id = $1 AND user_id = $2 RETURNING *', 
+      [id, userId]
+    );
 
     if (deleteOp.rowCount === 0) {
-      return res.status(404).json({ error: 'Gasto no encontrado' });
+      // Esto significa que el gasto no existe, O no le pertenece al usuario
+      return res.status(404).json({ error: 'Gasto no encontrado o no autorizado' });
     }
 
     res.json({ message: 'Gasto eliminado' });
@@ -86,5 +193,5 @@ app.delete('/expenses/:id', async (req, res) => {
 
 // --- Iniciar servidor
 app.listen(port, '0.0.0.0', () => {
-  console.log(`Servidor de Gastos corriendo en http://localhost:${port}`);
+  console.log(`Servidor de Gastos (con Auth) corriendo en http://localhost:${port}`);
 });
