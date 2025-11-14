@@ -1,0 +1,14 @@
+{
+  "name": "backend-recetas",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^4.17.1",
+    "pg": "^8.6.0"
+  }
+}
