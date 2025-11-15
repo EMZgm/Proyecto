@@ -194,7 +194,6 @@ app.get('/balance', authenticateToken, async (req, res) => {
   res.json({ balance: "Calculado" });
 });
 
-// ... código posterior ...
 // =======================================================
 // ==   NUEVO: API Endpoints para Ingresos (Protegidos)  ==
 // =======================================================
