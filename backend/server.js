@@ -22,7 +22,7 @@ const pool = new Pool({
 });
 
 // ===========================================
-// ==  NUEVO: ENDPOINTS DE AUTENTICACIÓN  ==
+// ==   ENDPOINTS DE AUTENTICACIÓN  ==
 // ===========================================
 
 // --- REGISTRO DE USUARIO ---
@@ -93,7 +93,7 @@ app.post('/login', async (req, res) => {
 });
 
 // ===========================================
-// ==  NUEVO: MIDDLEWARE DE AUTENTICACIÓN  ==
+// ==   MIDDLEWARE DE AUTENTICACIÓN  ==
 // ===========================================
 
 // Esta función revisará el token en CADA petición protegida
@@ -120,11 +120,10 @@ const authenticateToken = (req, res, next) => {
 
 
 // ==================================================
-// ==  MODIFICADO: API Endpoints para Gastos (Ahora protegidos)  ==
+// ==   API Endpoints para Gastos (Protegidos)  ==
 // ==================================================
 
 // --- OBTENER GASTOS (Solo los del usuario logueado) ---
-//     Añadimos 'authenticateToken' antes de la función
 app.get('/expenses', authenticateToken, async (req, res) => {
   try {
     // Obtenemos el ID del usuario desde el token (que el middleware puso en req.user)
@@ -191,6 +190,139 @@ app.delete('/expenses/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// =======================================================
+// ==   NUEVO: API Endpoints para Ingresos (Protegidos)  ==
+// =======================================================
+
+// --- OBTENER INGRESOS (Solo los del usuario logueado) ---
+app.get('/incomes', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const result = await pool.query(
+      'SELECT * FROM incomes WHERE user_id = $1 ORDER BY created_at DESC',
+      [userId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ error: 'Error al obtener ingresos' });
+  }
+});
+
+// --- CREAR INGRESO (Asignado al usuario logueado) ---
+app.post('/incomes', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { description, amount } = req.body; // Los ingresos solo necesitan descripción y monto
+
+    if (!description || !amount) {
+      return res.status(400).json({ error: 'Descripción y monto son obligatorios' });
+    }
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ error: 'El monto debe ser un número positivo' });
+    }
+
+    const newIncome = await pool.query(
+      'INSERT INTO incomes (description, amount, user_id) VALUES ($1, $2, $3) RETURNING *',
+      [description, parsedAmount, userId]
+    );
+
+    res.status(201).json(newIncome.rows[0]);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ error: 'Error al crear el ingreso' });
+  }
+});
+
+// --- BORRAR INGRESO (Solo si pertenece al usuario logueado) ---
+app.delete('/incomes/:id', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { id } = req.params;
+
+    const deleteOp = await pool.query(
+      'DELETE FROM incomes WHERE id = $1 AND user_id = $2 RETURNING *', 
+      [id, userId]
+    );
+
+    if (deleteOp.rowCount === 0) {
+      return res.status(404).json({ error: 'Ingreso no encontrado o no autorizado' });
+    }
+
+    res.json({ message: 'Ingreso eliminado' });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ error: 'Error al eliminar el ingreso' });
+  }
+});
+
+// ========================================================
+// ==   NUEVO: API Endpoints para Categorías (Protegidos)  ==
+// ========================================================
+
+// --- OBTENER TODAS LAS CATEGORÍAS DEL USUARIO ---
+app.get('/categories', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const result = await pool.query(
+      'SELECT * FROM categories WHERE user_id = $1 ORDER BY name ASC',
+      [userId]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ error: 'Error al obtener categorías' });
+  }
+});
+
+// --- CREAR UNA NUEVA CATEGORÍA ---
+app.post('/categories', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { name } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ error: 'El nombre es obligatorio' });
+    }
+
+    const newCategory = await pool.query(
+      'INSERT INTO categories (name, user_id) VALUES ($1, $2) RETURNING *',
+      [name, userId]
+    );
+
+    res.status(201).json(newCategory.rows[0]);
+  } catch (err) {
+    // Manejar error de "categoría ya existe" (código 23505)
+    if (err.code === '23505') {
+      return res.status(400).json({ error: 'Esa categoría ya existe' });
+    }
+    console.error(err.message);
+    res.status(500).json({ error: 'Error al crear la categoría' });
+  }
+});
+
+// --- BORRAR UNA CATEGORÍA ---
+app.delete('/categories/:id', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { id } = req.params;
+
+    const deleteOp = await pool.query(
+      'DELETE FROM categories WHERE id = $1 AND user_id = $2 RETURNING *',
+      [id, userId]
+    );
+
+    if (deleteOp.rowCount === 0) {
+      return res.status(404).json({ error: 'Categoría no encontrada o no autorizada' });
+    }
+
+    res.json({ message: 'Categoría eliminada' });
+  } catch (err) {
+    console.error(err.message);
+    res.status(500).json({ error: 'Error al eliminar la categoría' });
+  }
+});
 // --- Iniciar servidor
 app.listen(port, '0.0.0.0', () => {
   console.log(`Servidor de Gastos (con Auth) corriendo en http://localhost:${port}`);

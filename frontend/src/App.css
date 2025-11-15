@@ -235,3 +235,152 @@ header {
   padding-bottom: 20px;
   margin-bottom: 20px;
 }
+
+/* ====================================== */
+/* ==  NUEVOS ESTILOS PARA INGRESOS Y BALANCE  == */
+/* ====================================== */
+
+/* --- Barra de Balance --- */
+.balance-bar {
+  display: flex;
+  justify-content: space-around;
+  gap: 1rem;
+  padding: 1rem;
+  background-color: #f9f9f9;
+  border-radius: 8px;
+  margin-bottom: 1.5rem;
+  border: 1px solid #eee;
+}
+
+.balance-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  flex: 1;
+}
+
+.balance-card .balance-label {
+  font-size: 0.9rem;
+  color: #555;
+  margin-bottom: 0.25rem;
+  font-weight: 500;
+}
+
+.balance-card .balance-amount {
+  font-size: 1.5rem;
+  font-weight: bold;
+}
+
+.balance-card.income .balance-amount {
+  color: #28a745; /* Verde */
+}
+.balance-card.expense .balance-amount {
+  color: #dc3545; /* Rojo */
+}
+.balance-card.balance .balance-amount {
+  color: #333; /* Color neutro, el JS lo cambia */
+}
+
+
+/* --- Re-organización del 'content' --- */
+/* Tu 'content' original ahora se divide en dos columnas */
+.content {
+  display: flex;
+  gap: 2rem;
+  flex-wrap: wrap; /* Para que sea responsive en móviles */
+}
+
+.forms-column, .lists-column {
+  flex: 1; /* Cada columna toma la mitad del espacio */
+  min-width: 300px; /* Ancho mínimo antes de que se apilen */
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem; /* Espacio entre los formularios/listas */
+}
+
+/* --- Formulario de Ingresos (Nuevo) --- */
+.income-form {
+  background-color: #fdfdfd;
+  padding: 1.5rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  border: 1px solid #e7e7e7;
+}
+
+.income-form h2 {
+  margin-top: 0;
+  border-bottom: 2px solid #28a745; /* Línea verde */
+  padding-bottom: 0.5rem;
+}
+
+.income-form button {
+  background-color: #28a745; /* Botón verde */
+}
+.income-form button:hover {
+  background-color: #218838;
+}
+
+/* --- Lista de Ingresos (Nueva) --- */
+.income-list {
+  background-color: #fdfdfd;
+  padding: 1.5rem;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  border: 1px solid #e7e7e7;
+}
+
+.income-list h2 {
+  margin-top: 0;
+}
+
+.income-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.8rem 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+.income-card:last-child {
+  border-bottom: none;
+}
+
+.income-card h3 {
+  margin: 0;
+  font-weight: 500;
+}
+
+.income-amount {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.income-amount span {
+  font-size: 1.1rem;
+  font-weight: bold;
+  color: #28a745; /* Verde */
+}
+
+/* --- Pequeños ajustes a Gastos --- */
+.expense-amount span {
+  color: #dc3545; /* Rojo */
+  font-weight: bold;
+}
+
+/* Ajuste al total-display de gastos para que se parezca */
+.total-display {
+  background-color: #fff6f6;
+  border: 1px solid #f5c6cb;
+  color: #721c24;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  text-align: right;
+  font-weight: bold;
+  margin-bottom: 1rem;
+}
+
+.total-display span {
+  font-size: 1.2rem;
+}
