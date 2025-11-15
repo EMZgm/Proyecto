@@ -142,6 +142,9 @@ app.get('/expenses', authenticateToken, async (req, res) => {
 
 // --- CREAR GASTO (Asignado al usuario logueado) ---
 app.post('/expenses', authenticateToken, async (req, res) => {
+  // --- AÑADIDO POR RAMA A ---
+  console.log(`[AUDIT] Petición GET recibida de usuario: ${req.user.userId}`); 
+  // --- FIN AÑADIDO POR RAMA A ---
   try {
     const userId = req.user.userId;
     const { description, amount, category } = req.body;
