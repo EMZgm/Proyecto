@@ -2,17 +2,15 @@ require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
-const bcrypt = require('bcrypt'); // Para hashear contraseñas
-const jwt = require('jsonwebtoken'); // Para crear tokens
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 const port = 3001;
 
-// --- Middlewares
 app.use(cors());
 app.use(express.json());
 
-// --- Conexión a PostgreSQL
 const pool = new Pool({
   user: process.env.DB_USER,
   host: process.env.DB_HOST,
@@ -21,309 +19,222 @@ const pool = new Pool({
   port: process.env.DB_PORT,
 });
 
-// ===========================================
-// ==   ENDPOINTS DE AUTENTICACIÓN  ==
-// ===========================================
-
-// --- REGISTRO DE USUARIO ---
-app.post('/register', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email y contraseña son obligatorios' });
-    }
-
-    // Hashear la contraseña
-    const salt = await bcrypt.genSalt(10);
-    const password_hash = await bcrypt.hash(password, salt);
-
-    // Guardar en la base de datos
-    const newUser = await pool.query(
-      'INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email',
-      [email, password_hash]
-    );
-
-    res.status(201).json(newUser.rows[0]);
-
-  } catch (err) {
-    // Manejar error de "email ya existe" (código 23505 en Postgres)
-    if (err.code === '23505') {
-      return res.status(400).json({ error: 'El email ya está registrado' });
-    }
-    console.error(err.message);
-    res.status(500).json({ error: 'Error en los datos ingresados' });
-  }
-});
-
-// --- LOGIN DE USUARIO ---
-app.post('/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email y contraseña son obligatorios' });
-    }
-
-    // 1. Buscar al usuario
-    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    const user = result.rows[0];
-    if (!user) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
-    }
-
-    // 2. Comparar la contraseña
-    const isMatch = await bcrypt.compare(password, user.password_hash);
-    if (!isMatch) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
-    }
-
-    // 3. Crear el token (JWT)
-    const tokenPayload = { userId: user.id, email: user.email };
-    const token = jwt.sign(
-      tokenPayload, 
-      process.env.JWT_SECRET, 
-      { expiresIn: '1h' } // El token expira en 1 hora
-    );
-
-    res.json({ token, user: { id: user.id, email: user.email } });
-
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ error: 'Error en los datos ingresados' });
-  }
-});
-
-// ===========================================
-// ==   MIDDLEWARE DE AUTENTICACIÓN  ==
-// ===========================================
-
-// Esta función revisará el token en CADA petición protegida
+// === MIDDLEWARE AUTH ===
 const authenticateToken = (req, res, next) => {
-  // El token viene en el header: 'Authorization: Bearer <TOKEN>'
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-
-  if (token == null) {
-    return res.status(401).json({ error: 'Token no provisto' }); // No hay token
-  }
-
-  jwt.verify(token, process.env.JWT_SECRET, (err, userPayload) => {
-    if (err) {
-      return res.status(403).json({ error: 'Token inválido' }); // Token expiró o es falso
-    }
-
-    // Si el token es válido, guardamos los datos del usuario en 'req'
-    // para usarlo en las siguientes funciones
-    req.user = userPayload; 
-    next(); // Permite que la petición continúe
+  if (!token) return res.status(401).json({ error: 'Acceso denegado' });
+  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: 'Token inválido' });
+    req.user = user;
+    next();
   });
 };
 
-
-// ==================================================
-// ==   API Endpoints para Gastos (Protegidos)  ==
-// ==================================================
-
-// --- OBTENER GASTOS (Solo los del usuario logueado) ---
-app.get('/expenses', authenticateToken, async (req, res) => {
+// === AUTH ===
+app.post('/register', async (req, res) => {
   try {
-    // Obtenemos el ID del usuario desde el token (que el middleware puso en req.user)
-    const userId = req.user.userId;
-
-    const result = await pool.query(
-      'SELECT * FROM expenses WHERE user_id = $1 ORDER BY created_at DESC',
-      [userId]
-    );
-    res.json(result.rows);
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Faltan datos' });
+    const salt = await bcrypt.genSalt(10);
+    const hash = await bcrypt.hash(password, salt);
+    const newUser = await pool.query('INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email', [email, hash]);
+    res.status(201).json(newUser.rows[0]);
   } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ error: 'Error al obtener gastos' });
+    if (err.code === '23505') return res.status(400).json({ error: 'El email ya existe' });
+    res.status(500).json({ error: 'Error registro' });
   }
 });
 
-// --- CREAR GASTO (Asignado al usuario logueado) ---
+app.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    const user = result.rows[0];
+    if (!user || !(await bcrypt.compare(password, user.password_hash))) return res.status(401).json({ error: 'Credenciales inválidas' });
+    const token = jwt.sign({ userId: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '2h' });
+    res.json({ token, user: { id: user.id, email: user.email } });
+  } catch (err) { res.status(500).json({ error: 'Error login' }); }
+});
+
+// === GESTIÓN DE CAMPOS ===
+const ensureDefaultFields = async (userId, context) => {
+  const check = await pool.query('SELECT * FROM form_fields WHERE user_id = $1 AND context = $2', [userId, context]);
+  if (check.rowCount === 0) {
+    const defaults = context === 'expense' 
+      ? [
+          { key: 'description', label: 'Descripción', type: 'text', core: true, order: 0 },
+          { key: 'amount', label: 'Monto ($)', type: 'number', core: true, order: 1 },
+          { key: 'category', label: 'Categoría', type: 'select', core: true, order: 2 }
+        ]
+      : [
+          { key: 'description', label: 'Descripción', type: 'text', core: true, order: 0 },
+          { key: 'amount', label: 'Monto ($)', type: 'number', core: true, order: 1 }
+        ];
+    for (const d of defaults) {
+      await pool.query('INSERT INTO form_fields (user_id, context, field_key, label, type, is_core, is_enabled, ordering) VALUES ($1, $2, $3, $4, $5, $6, true, $7)', [userId, context, d.key, d.label, d.type, d.core, d.order]);
+    }
+  }
+};
+
+app.get('/form-fields/:context', authenticateToken, async (req, res) => {
+  try {
+    const { context } = req.params;
+    await ensureDefaultFields(req.user.userId, context); 
+    const result = await pool.query('SELECT * FROM form_fields WHERE user_id = $1 AND context = $2 AND is_enabled = true ORDER BY ordering ASC, id ASC', [req.user.userId, context]);
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: 'Error campos' }); }
+});
+
+app.post('/form-fields', authenticateToken, async (req, res) => {
+  try {
+    const { context, label, type } = req.body;
+    if (!label) return res.status(400).json({ error: 'Nombre requerido' });
+    const field_key = label.toLowerCase().replace(/[^a-z0-9]/g, '_') + '_' + Date.now();
+    const maxOrder = await pool.query('SELECT MAX(ordering) as max_val FROM form_fields WHERE user_id = $1 AND context = $2', [req.user.userId, context]);
+    const nextOrder = (maxOrder.rows[0].max_val || 0) + 1;
+    const newField = await pool.query('INSERT INTO form_fields (user_id, context, field_key, label, type, is_core, ordering) VALUES ($1, $2, $3, $4, $5, false, $6) RETURNING *', [req.user.userId, context, field_key, label, type, nextOrder]);
+    res.json(newField.rows[0]);
+  } catch (err) { res.status(500).json({ error: 'Error crear campo' }); }
+});
+
+app.put('/form-fields/reorder', authenticateToken, async (req, res) => {
+  try {
+    const { orderedIds } = req.body; 
+    for (let i = 0; i < orderedIds.length; i++) {
+        await pool.query('UPDATE form_fields SET ordering = $1 WHERE id = $2 AND user_id = $3', [i, orderedIds[i], req.user.userId]);
+    }
+    res.json({ message: 'Orden actualizado' });
+  } catch (err) { res.status(500).json({ error: 'Error reordenar' }); }
+});
+
+app.delete('/form-fields/:id', authenticateToken, async (req, res) => {
+  try {
+    const check = await pool.query('SELECT is_core, field_key FROM form_fields WHERE id = $1', [req.params.id]);
+    if (check.rowCount === 0) return res.status(404).json({error: 'No encontrado'});
+    if (check.rows[0].is_core) {
+      if (check.rows[0].field_key === 'amount') return res.status(400).json({error: 'Monto es obligatorio.'});
+      await pool.query('UPDATE form_fields SET is_enabled = false WHERE id = $1', [req.params.id]);
+    } else {
+      await pool.query('DELETE FROM form_fields WHERE id = $1 AND user_id = $2', [req.params.id, req.user.userId]);
+    }
+    res.json({ message: 'Eliminado' });
+  } catch (err) { res.status(500).json({ error: 'Error borrar' }); }
+});
+
+// === GASTOS E INGRESOS (CRUD) ===
+
+// Crear Gasto
 app.post('/expenses', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { description, amount, category } = req.body;
-
-    if (!description || !amount) {
-      return res.status(400).json({ error: 'Descripción y monto son obligatorios' });
-    }
-    const parsedAmount = parseFloat(amount);
-    if (isNaN(parsedAmount) || parsedAmount <= 0) {
-      return res.status(400).json({ error: 'El monto debe ser un número positivo' });
-    }
-
-    const newExpense = await pool.query(
-      'INSERT INTO expenses (description, amount, category, user_id) VALUES ($1, $2, $3, $4) RETURNING *',
-      [description, parsedAmount, category, userId] // Añadimos userId
-    );
-
-    res.status(201).json(newExpense.rows[0]);
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ error: 'Error al crear el gasto' });
-  }
+    const formData = req.body;
+    const amount = formData.amount ? parseFloat(formData.amount) : 0;
+    const description = formData.description || '';
+    const category = formData.category || 'Varios';
+    const custom_data = { ...formData };
+    delete custom_data.amount; delete custom_data.description; delete custom_data.category;
+    if (amount <= 0) return res.status(400).json({error: 'Monto requerido'});
+    const r = await pool.query('INSERT INTO expenses (amount, description, category, custom_data, user_id) VALUES ($1, $2, $3, $4, $5) RETURNING *', [amount, description, category, custom_data, userId]);
+    res.status(201).json(r.rows[0]);
+  } catch (err) { res.status(500).json({ error: 'Error gasto' }); }
 });
 
-// --- BORRAR GASTO (Solo si pertenece al usuario logueado) ---
-app.delete('/expenses/:id', authenticateToken, async (req, res) => {
+// NUEVO: Editar Gasto
+app.put('/expenses/:id', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.userId;
     const { id } = req.params;
-
-    // Modificamos el query para ASEGURARNOS que el usuario solo borra sus propios gastos
-    const deleteOp = await pool.query(
-      'DELETE FROM expenses WHERE id = $1 AND user_id = $2 RETURNING *', 
-      [id, userId]
-    );
-
-    if (deleteOp.rowCount === 0) {
-      // Esto significa que el gasto no existe, O no le pertenece al usuario
-      return res.status(404).json({ error: 'Gasto no encontrado o no autorizado' });
-    }
-
-    res.json({ message: 'Gasto eliminado' });
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ error: 'Error al eliminar el gasto' });
-  }
-});
-
-// =======================================================
-// ==   NUEVO: API Endpoints para Ingresos (Protegidos)  ==
-// =======================================================
-
-// --- OBTENER INGRESOS (Solo los del usuario logueado) ---
-app.get('/incomes', authenticateToken, async (req, res) => {
-  try {
     const userId = req.user.userId;
+    const formData = req.body;
+    
+    // Extraemos campos core
+    const amount = formData.amount ? parseFloat(formData.amount) : 0;
+    const description = formData.description || '';
+    const category = formData.category || 'Varios';
+    
+    // Lo demás a custom_data
+    const custom_data = { ...formData };
+    delete custom_data.amount; delete custom_data.description; delete custom_data.category;
+
+    if (amount <= 0) return res.status(400).json({error: 'Monto requerido'});
+
     const result = await pool.query(
-      'SELECT * FROM incomes WHERE user_id = $1 ORDER BY created_at DESC',
-      [userId]
+      'UPDATE expenses SET amount=$1, description=$2, category=$3, custom_data=$4 WHERE id=$5 AND user_id=$6 RETURNING *',
+      [amount, description, category, custom_data, id, userId]
     );
-    res.json(result.rows);
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ error: 'Error al obtener ingresos' });
+    
+    if (result.rowCount === 0) return res.status(404).json({error: 'Gasto no encontrado'});
+    res.json(result.rows[0]);
+  } catch (err) { 
+    console.error(err);
+    res.status(500).json({ error: 'Error editando gasto' }); 
   }
 });
 
-// --- CREAR INGRESO (Asignado al usuario logueado) ---
+// Crear Ingreso
 app.post('/incomes', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.userId;
-    const { description, amount } = req.body; // Los ingresos solo necesitan descripción y monto
-
-    if (!description || !amount) {
-      return res.status(400).json({ error: 'Descripción y monto son obligatorios' });
-    }
-    const parsedAmount = parseFloat(amount);
-    if (isNaN(parsedAmount) || parsedAmount <= 0) {
-      return res.status(400).json({ error: 'El monto debe ser un número positivo' });
-    }
-
-    const newIncome = await pool.query(
-      'INSERT INTO incomes (description, amount, user_id) VALUES ($1, $2, $3) RETURNING *',
-      [description, parsedAmount, userId]
-    );
-
-    res.status(201).json(newIncome.rows[0]);
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ error: 'Error al crear el ingreso' });
-  }
+    const formData = req.body;
+    const amount = formData.amount ? parseFloat(formData.amount) : 0;
+    const description = formData.description || '';
+    const custom_data = { ...formData };
+    delete custom_data.amount; delete custom_data.description;
+    if (amount <= 0) return res.status(400).json({error: 'Monto requerido'});
+    const r = await pool.query('INSERT INTO incomes (amount, description, custom_data, user_id) VALUES ($1, $2, $3, $4) RETURNING *', [amount, description, custom_data, userId]);
+    res.status(201).json(r.rows[0]);
+  } catch (err) { res.status(500).json({ error: 'Error ingreso' }); }
 });
 
-// --- BORRAR INGRESO (Solo si pertenece al usuario logueado) ---
-app.delete('/incomes/:id', authenticateToken, async (req, res) => {
+// NUEVO: Editar Ingreso
+app.put('/incomes/:id', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.userId;
     const { id } = req.params;
-
-    const deleteOp = await pool.query(
-      'DELETE FROM incomes WHERE id = $1 AND user_id = $2 RETURNING *', 
-      [id, userId]
-    );
-
-    if (deleteOp.rowCount === 0) {
-      return res.status(404).json({ error: 'Ingreso no encontrado o no autorizado' });
-    }
-
-    res.json({ message: 'Ingreso eliminado' });
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ error: 'Error al eliminar el ingreso' });
-  }
-});
-
-// ========================================================
-// ==   NUEVO: API Endpoints para Categorías (Protegidos)  ==
-// ========================================================
-
-// --- OBTENER TODAS LAS CATEGORÍAS DEL USUARIO ---
-app.get('/categories', authenticateToken, async (req, res) => {
-  try {
     const userId = req.user.userId;
+    const formData = req.body;
+    
+    const amount = formData.amount ? parseFloat(formData.amount) : 0;
+    const description = formData.description || '';
+    
+    const custom_data = { ...formData };
+    delete custom_data.amount; delete custom_data.description;
+
+    if (amount <= 0) return res.status(400).json({error: 'Monto requerido'});
+
     const result = await pool.query(
-      'SELECT * FROM categories WHERE user_id = $1 ORDER BY name ASC',
-      [userId]
+      'UPDATE incomes SET amount=$1, description=$2, custom_data=$3 WHERE id=$4 AND user_id=$5 RETURNING *',
+      [amount, description, custom_data, id, userId]
     );
-    res.json(result.rows);
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ error: 'Error al obtener categorías' });
+    
+    if (result.rowCount === 0) return res.status(404).json({error: 'Ingreso no encontrado'});
+    res.json(result.rows[0]);
+  } catch (err) { 
+    console.error(err);
+    res.status(500).json({ error: 'Error editando ingreso' }); 
   }
 });
 
-// --- CREAR UNA NUEVA CATEGORÍA ---
+// Getters y Deletes
+app.get('/expenses', authenticateToken, async (req, res) => {
+    const r = await pool.query('SELECT * FROM expenses WHERE user_id = $1 ORDER BY created_at DESC', [req.user.userId]); res.json(r.rows);
+});
+app.delete('/expenses/:id', authenticateToken, async (req, res) => {
+    await pool.query('DELETE FROM expenses WHERE id = $1 AND user_id = $2', [req.params.id, req.user.userId]); res.json({msg:'ok'});
+});
+app.get('/incomes', authenticateToken, async (req, res) => {
+    const r = await pool.query('SELECT * FROM incomes WHERE user_id = $1 ORDER BY created_at DESC', [req.user.userId]); res.json(r.rows);
+});
+app.delete('/incomes/:id', authenticateToken, async (req, res) => {
+    await pool.query('DELETE FROM incomes WHERE id = $1 AND user_id = $2', [req.params.id, req.user.userId]); res.json({msg:'ok'});
+});
+app.get('/categories', authenticateToken, async (req, res) => {
+    const r = await pool.query('SELECT * FROM categories WHERE user_id = $1', [req.user.userId]); res.json(r.rows);
+});
 app.post('/categories', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const { name } = req.body;
-
-    if (!name) {
-      return res.status(400).json({ error: 'El nombre es obligatorio' });
-    }
-
-    const newCategory = await pool.query(
-      'INSERT INTO categories (name, user_id) VALUES ($1, $2) RETURNING *',
-      [name, userId]
-    );
-
-    res.status(201).json(newCategory.rows[0]);
-  } catch (err) {
-    // Manejar error de "categoría ya existe" (código 23505)
-    if (err.code === '23505') {
-      return res.status(400).json({ error: 'Esa categoría ya existe' });
-    }
-    console.error(err.message);
-    res.status(500).json({ error: 'Error al crear la categoría' });
-  }
+    const r = await pool.query('INSERT INTO categories (name, user_id) VALUES ($1, $2) RETURNING *', [req.body.name, req.user.userId]); res.json(r.rows[0]);
 });
-
-// --- BORRAR UNA CATEGORÍA ---
 app.delete('/categories/:id', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const { id } = req.params;
-
-    const deleteOp = await pool.query(
-      'DELETE FROM categories WHERE id = $1 AND user_id = $2 RETURNING *',
-      [id, userId]
-    );
-
-    if (deleteOp.rowCount === 0) {
-      return res.status(404).json({ error: 'Categoría no encontrada o no autorizada' });
-    }
-
-    res.json({ message: 'Categoría eliminada' });
-  } catch (err) {
-    console.error(err.message);
-    res.status(500).json({ error: 'Error al eliminar la categoría' });
-  }
+    await pool.query('DELETE FROM categories WHERE id = $1', [req.params.id]); res.json({msg:'ok'});
 });
-// --- Iniciar servidor
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Servidor de Gastos (con Auth) corriendo en http://localhost:${port}`);
-});
+
+app.listen(port, () => console.log(`Backend corriendo en http://localhost:${port}`));
