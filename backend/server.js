@@ -51,7 +51,7 @@ app.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'El email ya está registrado' });
     }
     console.error(err.message);
-    res.status(500).json({ error: 'Error en el servidor' });
+    res.status(500).json({ error: 'Error en los datos ingresados' });
   }
 });
 
@@ -88,7 +88,7 @@ app.post('/login', async (req, res) => {
 
   } catch (err) {
     console.error(err.message);
-    res.status(500).json({ error: 'Error en el servidor' });
+    res.status(500).json({ error: 'Error en los datos ingresados' });
   }
 });
 
