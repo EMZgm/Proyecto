@@ -1,0 +1,44 @@
+name: Despliegue Gestor de Gastos
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  # === TRABAJO 1: FRONTEND ===
+  deploy-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v3
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Instalar dependencias (Frontend)
+        working-directory: ./frontend
+        run: npm install
+
+      - name: Construir proyecto (Build)
+        working-directory: ./frontend
+        env:
+          # Aquí se inyecta la URL de tu backend que acabamos de guardar en Secretos
+          REACT_APP_API_URL: ${{ secrets.REACT_APP_API_URL }}
+          CI: false
+        run: npm run build
+
+      - name: Desplegar a GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: frontend/build
+          branch: gh-pages
+
+  # === TRABAJO 2: BACKEND ===
+  deploy-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Disparar Deploy en Render
+        # Esto le avisa a Render que hay código nuevo
+        run: curl -X POST ${{ secrets.RENDER_DEPLOY_HOOK }}

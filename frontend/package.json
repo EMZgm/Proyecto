@@ -1,5 +1,6 @@
 {
-  "name": "frontend-recetas",
+  "name": "gestor-gastos-frontend",
+  "homepage": "https://EMZgm.github.io/Proyecto",
   "version": "1.0.0",
   "private": true,
   "dependencies": {
