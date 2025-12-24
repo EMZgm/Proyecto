@@ -1,18 +1,18 @@
-name: Despliegue Gestor de Gastos
+name: Despliegue Completo (Front & Back)
 
 on:
   push:
     branches: [ main ]
 
 jobs:
-  # === TRABAJO 1: FRONTEND ===
-  deploy-frontend:
+  # === TRABAJO 1: DESPLEGAR FRONTEND EN GITHUB PAGES ===
+  build-and-deploy-frontend:
     runs-on: ubuntu-latest
     steps:
-      - name: Descargar código
+      - name: Checkout del código
         uses: actions/checkout@v3
 
-      - name: Configurar Node.js
+      - name: Instalar Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
@@ -24,21 +24,23 @@ jobs:
       - name: Construir proyecto (Build)
         working-directory: ./frontend
         env:
-          # Aquí se inyecta la URL de tu backend que acabamos de guardar en Secretos
+          # Aquí se inyecta la URL de tu backend
           REACT_APP_API_URL: ${{ secrets.REACT_APP_API_URL }}
           CI: false
+          NODE_OPTIONS: "--openssl-legacy-provider"  # <--- ¡AGREGA ESTA LÍNEA!
         run: npm run build
 
       - name: Desplegar a GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4
         with:
           folder: frontend/build
-          branch: gh-pages
+          branch: gh-pages # La rama donde vivirá la web final
 
-  # === TRABAJO 2: BACKEND ===
+  # === TRABAJO 2: DESPLEGAR BACKEND EN RENDER ===
   deploy-backend:
     runs-on: ubuntu-latest
     steps:
-      - name: Disparar Deploy en Render
-        # Esto le avisa a Render que hay código nuevo
-        run: curl -X POST ${{ secrets.RENDER_DEPLOY_HOOK }}
+      - name: Disparar Deploy Hook de Render
+        # Esto es un simple "toque" a la URL de Render para que actualice
+        run: |
+          curl -X POST ${{ secrets.RENDER_DEPLOY_HOOK }}
