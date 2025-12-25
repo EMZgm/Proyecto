@@ -66,7 +66,7 @@ function ExpenseManager({ token, onLogout }) {
     }
   };
 
-  // 2. FETCH INGRESOS (CORREGIDO: Comparación de String simple)
+  // 2. FETCH INGRESOS
   const fetchFilteredIncomes = async () => {
     const res = await authedFetch(`${API_URL}/incomes`);
     if (!res) return;
@@ -76,16 +76,10 @@ function ExpenseManager({ token, onLogout }) {
         data = Array.isArray(data) ? data : [];
 
         if (startDate && endDate) {
-            // FILTRO DE FECHAS "A PRUEBA DE BALAS"
-            // Comparamos cadenas de texto 'YYYY-MM-DD' directamente.
             data = data.filter(item => {
                 const itemRaw = item.date || item.created_at;
                 if (!itemRaw) return false;
-                
-                // Cortamos la parte de la hora (todo después de la T)
                 const itemDateStr = itemRaw.split('T')[0];
-                
-                // Comparación alfanumérica simple (funciona perfecto con fechas ISO)
                 return itemDateStr >= startDate && itemDateStr <= endDate;
             });
         }
@@ -135,10 +129,6 @@ function ExpenseManager({ token, onLogout }) {
     setStartDate('');
     setEndDate('');
     setHiddenCategories([]); 
-    // Truco: Llamar a loadData recargará todo limpio porque startDate/endDate 
-    // aún no se han limpiado dentro del closure de fetchFilteredExpenses en este ciclo,
-    // pero si llamamos a las funciones fetch individuales SIN argumentos, funcionaría mejor.
-    // Para simplificar, forzamos recarga directa:
     authedFetch(`${API_URL}/expenses`).then(r => r.json()).then(d => setExpenses(Array.isArray(d) ? d : []));
     authedFetch(`${API_URL}/incomes`).then(r => r.json()).then(d => setIncomes(Array.isArray(d) ? d : []));
   };
@@ -157,19 +147,12 @@ function ExpenseManager({ token, onLogout }) {
     return sum + (parseFloat(e.amount) || 0);
   }, 0);
 
-  // === FORMATEO DE FECHA (CORREGIDO: Sin trucos de zona horaria) ===
+  // === FORMATEO DE FECHA ===
   const formatDate = (dateString) => {
     if (!dateString) return '';
-    // Paso 1: Obtener solo la parte de la fecha YYYY-MM-DD
     const isoDate = dateString.split('T')[0];
-    
-    // Paso 2: Separar año, mes y día
     const [year, month, day] = isoDate.split('-');
-
-    // Paso 3: Crear fecha local usando el constructor (Año, Mes-1, Día)
-    // Esto evita que JS intente convertir a UTC y cambie el día.
     const date = new Date(year, month - 1, day);
-
     return date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
   };
 
@@ -181,10 +164,51 @@ function ExpenseManager({ token, onLogout }) {
   const onDragEnter = (e, index) => { dragOverItem.current = index; };
   const onDragEnd = (e, context) => { e.target.classList.remove('dragging-item'); handleSort(context); };
   const openEditModal = (item, type) => { const flatData = { ...item, ...(item.custom_data || {}) }; setEditingItem({ ...flatData, type }); setEditForm(flatData); };
-  const handleUpdate = async (e) => { e.preventDefault(); if (!editingItem) return; const url = editingItem.type === 'expense' ? `${API_URL}/expenses/${editingItem.id}` : `${API_URL}/incomes/${editingItem.id}`; const res = await authedFetch(url, { method: 'PUT', body: JSON.stringify(editForm) }); if (res && res.ok) { setEditingItem(null); loadData(); } else { alert('Error al actualizar.'); } };
+  
+  const handleUpdate = async (e) => { 
+      e.preventDefault(); 
+      if (!editingItem) return; 
+      // Fix fecha al editar también
+      const body = { ...editForm };
+      if (!body.date) {
+         const d = new Date();
+         body.date = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      }
+
+      const url = editingItem.type === 'expense' ? `${API_URL}/expenses/${editingItem.id}` : `${API_URL}/incomes/${editingItem.id}`; 
+      const res = await authedFetch(url, { method: 'PUT', body: JSON.stringify(body) }); 
+      if (res && res.ok) { setEditingItem(null); loadData(); } 
+      else { alert('Error al actualizar.'); } 
+  };
+  
   const handleCreateChange = (e, context) => { const { name, value } = e.target; if (context === 'expense') setExpenseForm({ ...expenseForm, [name]: value }); else setIncomeForm({ ...incomeForm, [name]: value }); };
   const handleEditChange = (e) => { setEditForm({ ...editForm, [e.target.name]: e.target.value }); };
-  const handleSubmit = async (e, context) => { e.preventDefault(); const url = context === 'expense' ? `${API_URL}/expenses` : `${API_URL}/incomes`; const body = context === 'expense' ? expenseForm : incomeForm; const res = await authedFetch(url, { method: 'POST', body: JSON.stringify(body) }); if (res && res.ok) { context === 'expense' ? setExpenseForm({}) : setIncomeForm({}); loadData(); } else { alert('Error al guardar.'); } };
+  
+  // === AQUÍ ESTÁ EL CAMBIO CLAVE (handleSubmit) ===
+  const handleSubmit = async (e, context) => { 
+      e.preventDefault(); 
+      const url = context === 'expense' ? `${API_URL}/expenses` : `${API_URL}/incomes`; 
+      
+      // Hacemos una copia de los datos
+      const body = context === 'expense' ? { ...expenseForm } : { ...incomeForm };
+
+      // FIX ZONA HORARIA: Si el usuario no puso fecha manual, usamos la fecha LOCAL de hoy
+      if (!body.date) {
+         const d = new Date();
+         // Construimos YYYY-MM-DD manualmente para asegurar que sea TU día, no el de Londres
+         const localDateString = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+         body.date = localDateString;
+      }
+
+      const res = await authedFetch(url, { method: 'POST', body: JSON.stringify(body) }); 
+      if (res && res.ok) { 
+          context === 'expense' ? setExpenseForm({}) : setIncomeForm({}); 
+          loadData(); 
+      } else { 
+          alert('Error al guardar.'); 
+      } 
+  };
+
   const handleDelete = async (type, id) => { if (window.confirm('¿Borrar elemento?')) { await authedFetch(`${API_URL}/${type}/${id}`, { method: 'DELETE' }); loadData(); } };
   const handleAddField = async (context) => { if (!newFieldName) return; await authedFetch(`${API_URL}/form-fields`, { method: 'POST', body: JSON.stringify({ context, label: newFieldName, type: 'text' }) }); setNewFieldName(''); loadData(); };
   const handleDeleteField = async (id) => { if (window.confirm('¿Eliminar campo?')) { await authedFetch(`${API_URL}/form-fields/${id}`, { method: 'DELETE' }); loadData(); } };
@@ -219,6 +243,7 @@ function ExpenseManager({ token, onLogout }) {
   );
 
   const renderItemContent = (item, type) => {
+    // Al mezclar item y custom_data, la fecha de custom_data (la nuestra) sobrescribe a la del servidor
     const allData = { ...item, ...item.custom_data };
     const fieldsConfig = type === 'expense' ? expenseFields : incomeFields;
     if (!Array.isArray(fieldsConfig)) return null;
@@ -291,7 +316,7 @@ function ExpenseManager({ token, onLogout }) {
         <h1 style={{ 
             fontFamily: "'Segoe UI', sans-serif", fontSize: '1.8rem', fontWeight: '800', color: '#2c3e50', letterSpacing: '4px', textTransform: 'uppercase', margin: 0, textShadow: '1px 1px 2px rgba(0,0,0,0.1)'
         }}>
-          Mi bolsillo
+          Finza 💸
         </h1>
         <button onClick={onLogout} className="logout-btn">Cerrar Sesión</button>
       </header>
