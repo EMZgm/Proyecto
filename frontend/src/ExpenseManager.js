@@ -52,21 +52,42 @@ function ExpenseManager({ token, onLogout }) {
     }
   };
 
-  // 1. FETCH GASTOS
+  // === AYUDA: OBTENER FECHA LOCAL STRING (YYYY-MM-DD) ===
+  // Esta función es la clave. Convierte la fecha del servidor a TU fecha real.
+  const getLocalDateYMD = (dateString) => {
+    if (!dateString) return '';
+    const date = new Date(dateString);
+    // getFullYear, getMonth, getDate usan la hora de tu PC (Ecuador)
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // 1. FETCH GASTOS (Filtrado 100% Local para precisión)
   const fetchFilteredExpenses = async () => {
-    let url = `${API_URL}/expenses`;
-    if (startDate && endDate) url += `?startDate=${startDate}&endDate=${endDate}`;
+    // Traemos TODO del servidor y filtramos aquí para evitar errores de zona horaria del backend
+    const url = `${API_URL}/expenses`; 
     
     const res = await authedFetch(url);
     if (!res) return;
 
     if (res.ok) {
-        const data = await res.json();
-        setExpenses(Array.isArray(data) ? data : []);
+        let data = await res.json();
+        data = Array.isArray(data) ? data : [];
+
+        // Filtro manual en el cliente
+        if (startDate && endDate) {
+            data = data.filter(item => {
+                const itemDateStr = getLocalDateYMD(item.date || item.created_at);
+                return itemDateStr >= startDate && itemDateStr <= endDate;
+            });
+        }
+        setExpenses(data);
     }
   };
 
-  // 2. FETCH INGRESOS
+  // 2. FETCH INGRESOS (Filtrado 100% Local para precisión)
   const fetchFilteredIncomes = async () => {
     const res = await authedFetch(`${API_URL}/incomes`);
     if (!res) return;
@@ -77,9 +98,8 @@ function ExpenseManager({ token, onLogout }) {
 
         if (startDate && endDate) {
             data = data.filter(item => {
-                const itemRaw = item.date || item.created_at;
-                if (!itemRaw) return false;
-                const itemDateStr = itemRaw.split('T')[0];
+                // Usamos la misma función de conversión local
+                const itemDateStr = getLocalDateYMD(item.date || item.created_at);
                 return itemDateStr >= startDate && itemDateStr <= endDate;
             });
         }
@@ -129,6 +149,7 @@ function ExpenseManager({ token, onLogout }) {
     setStartDate('');
     setEndDate('');
     setHiddenCategories([]); 
+    // Recarga limpia
     authedFetch(`${API_URL}/expenses`).then(r => r.json()).then(d => setExpenses(Array.isArray(d) ? d : []));
     authedFetch(`${API_URL}/incomes`).then(r => r.json()).then(d => setIncomes(Array.isArray(d) ? d : []));
   };
@@ -147,12 +168,11 @@ function ExpenseManager({ token, onLogout }) {
     return sum + (parseFloat(e.amount) || 0);
   }, 0);
 
-  // === FORMATEO DE FECHA ===
+  // === FORMATEO DE FECHA VISUAL ===
   const formatDate = (dateString) => {
     if (!dateString) return '';
-    const isoDate = dateString.split('T')[0];
-    const [year, month, day] = isoDate.split('-');
-    const date = new Date(year, month - 1, day);
+    const date = new Date(dateString);
+    // Usamos toLocaleDateString que usa la zona horaria del navegador automáticamente
     return date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
   };
 
@@ -168,13 +188,14 @@ function ExpenseManager({ token, onLogout }) {
   const handleUpdate = async (e) => { 
       e.preventDefault(); 
       if (!editingItem) return; 
-      // Fix fecha al editar también
       const body = { ...editForm };
+      
+      // Si editamos y no hay fecha, poner la de hoy
       if (!body.date) {
-         const d = new Date();
-         body.date = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+         body.date = getLocalDateYMD(new Date());
       }
-
+      
+      // Aseguramos que si el usuario eligió fecha en el input date, se mande tal cual
       const url = editingItem.type === 'expense' ? `${API_URL}/expenses/${editingItem.id}` : `${API_URL}/incomes/${editingItem.id}`; 
       const res = await authedFetch(url, { method: 'PUT', body: JSON.stringify(body) }); 
       if (res && res.ok) { setEditingItem(null); loadData(); } 
@@ -184,20 +205,14 @@ function ExpenseManager({ token, onLogout }) {
   const handleCreateChange = (e, context) => { const { name, value } = e.target; if (context === 'expense') setExpenseForm({ ...expenseForm, [name]: value }); else setIncomeForm({ ...incomeForm, [name]: value }); };
   const handleEditChange = (e) => { setEditForm({ ...editForm, [e.target.name]: e.target.value }); };
   
-  // === AQUÍ ESTÁ EL CAMBIO CLAVE (handleSubmit) ===
   const handleSubmit = async (e, context) => { 
       e.preventDefault(); 
       const url = context === 'expense' ? `${API_URL}/expenses` : `${API_URL}/incomes`; 
-      
-      // Hacemos una copia de los datos
       const body = context === 'expense' ? { ...expenseForm } : { ...incomeForm };
 
-      // FIX ZONA HORARIA: Si el usuario no puso fecha manual, usamos la fecha LOCAL de hoy
+      // Si no puso fecha, calculamos la local
       if (!body.date) {
-         const d = new Date();
-         // Construimos YYYY-MM-DD manualmente para asegurar que sea TU día, no el de Londres
-         const localDateString = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-         body.date = localDateString;
+         body.date = getLocalDateYMD(new Date());
       }
 
       const res = await authedFetch(url, { method: 'POST', body: JSON.stringify(body) }); 
@@ -243,7 +258,6 @@ function ExpenseManager({ token, onLogout }) {
   );
 
   const renderItemContent = (item, type) => {
-    // Al mezclar item y custom_data, la fecha de custom_data (la nuestra) sobrescribe a la del servidor
     const allData = { ...item, ...item.custom_data };
     const fieldsConfig = type === 'expense' ? expenseFields : incomeFields;
     if (!Array.isArray(fieldsConfig)) return null;
@@ -316,7 +330,7 @@ function ExpenseManager({ token, onLogout }) {
         <h1 style={{ 
             fontFamily: "'Segoe UI', sans-serif", fontSize: '1.8rem', fontWeight: '800', color: '#2c3e50', letterSpacing: '4px', textTransform: 'uppercase', margin: 0, textShadow: '1px 1px 2px rgba(0,0,0,0.1)'
         }}>
-          Finza 💸
+          Mi bolsillo
         </h1>
         <button onClick={onLogout} className="logout-btn">Cerrar Sesión</button>
       </header>
