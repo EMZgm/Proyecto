@@ -11,12 +11,16 @@ const port = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
+const isProduction = process.env.NODE_ENV === 'production';
+
+const connectionString = process.env.DATABASE_URL 
+  ? process.env.DATABASE_URL 
+  : `postgresql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`;
+
 const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT,
+  connectionString: connectionString,
+  // ESTO ES LO IMPORTANTE PARA RENDER:
+  ssl: isProduction ? { rejectUnauthorized: false } : false 
 });
 
 // === MIDDLEWARE AUTH ===
@@ -215,8 +219,32 @@ app.put('/incomes/:id', authenticateToken, async (req, res) => {
 });
 
 // Getters y Deletes
+// OBTENER GASTOS (CON FILTROS DE FECHA)
 app.get('/expenses', authenticateToken, async (req, res) => {
-    const r = await pool.query('SELECT * FROM expenses WHERE user_id = $1 ORDER BY created_at DESC', [req.user.userId]); res.json(r.rows);
+  try {
+    const { startDate, endDate } = req.query; // Recibimos las fechas
+    const userId = req.user.userId;
+
+    let query = 'SELECT * FROM expenses WHERE user_id = $1';
+    let params = [userId];
+
+    // Si existen fechas, agregamos la condición al SQL
+    if (startDate && endDate) {
+      // Usamos ::DATE para ignorar la hora exacta y comparar solo el día
+      query += ' AND created_at::DATE BETWEEN $2 AND $3';
+      params.push(startDate, endDate);
+    }
+
+    // Ordenamos por fecha descendente (más reciente primero)
+    query += ' ORDER BY created_at DESC';
+
+    const result = await pool.query(query, params);
+    res.json(result.rows);
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener gastos' });
+  }
 });
 app.delete('/expenses/:id', authenticateToken, async (req, res) => {
     await pool.query('DELETE FROM expenses WHERE id = $1 AND user_id = $2', [req.params.id, req.user.userId]); res.json({msg:'ok'});

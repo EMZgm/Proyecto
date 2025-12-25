@@ -4,13 +4,16 @@
   "version": "1.0.0",
   "private": true,
   "dependencies": {
+    "chart.js": "^4.5.1",
     "dotenv": "^17.2.3",
-    "react": "^17.0.2",
-    "react-dom": "^17.0.2",
-    "react-scripts": "4.0.3"
+    "react": "^19.2.3",
+    "react-chartjs-2": "^5.3.1",
+    "react-dom": "^19.2.3",
+    "react-scripts": "^5.0.1",
+    "recharts": "^3.6.0"
   },
   "scripts": {
-    "start": "set \"NODE_OPTIONS=--openssl-legacy-provider\" && react-scripts start",
+    "start": "react-scripts start",
     "build": "react-scripts build"
   },
   "browserslist": {

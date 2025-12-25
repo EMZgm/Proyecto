@@ -1,171 +1,155 @@
 import React, { useState, useEffect, useRef } from 'react';
+import ExpensesChart from './ExpensesChart';
 
 const API_URL = process.env.REACT_APP_API_URL;
 
 function ExpenseManager({ token, onLogout }) {
   const [view, setView] = useState('dashboard');
   
+  const [showChart, setShowChart] = useState(true); 
+
+  // === FILTROS ===
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  
+  const [hiddenCategories, setHiddenCategories] = useState([]);
+
+  // Datos
   const [expenses, setExpenses] = useState([]);
   const [incomes, setIncomes] = useState([]);
   const [categories, setCategories] = useState([]);
-  
   const [expenseFields, setExpenseFields] = useState([]);
   const [incomeFields, setIncomeFields] = useState([]);
 
-  // Estados de formularios (CREAR)
+  // Formularios
   const [expenseForm, setExpenseForm] = useState({});
   const [incomeForm, setIncomeForm] = useState({});
+  
+  const [editingItem, setEditingItem] = useState(null);
+  const [editForm, setEditForm] = useState({});
 
-  // === ESTADO PARA LA EDICIÓN (NUEVO) ===
-  const [editingItem, setEditingItem] = useState(null); // El objeto que estamos editando
-  const [editForm, setEditForm] = useState({}); // Los datos del formulario de edición
-
-  // Configuración
   const [newFieldName, setNewFieldName] = useState('');
   const [newCatName, setNewCatName] = useState('');
 
-  // Refs Drag & Drop
   const dragItem = useRef();
   const dragOverItem = useRef();
 
+  // === FETCH ===
   const authedFetch = (url, options = {}) => {
-    const headers = { ...options.headers, 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
+    const headers = { 
+      ...options.headers, 
+      'Content-Type': 'application/json', 
+      'Authorization': `Bearer ${token}` 
+    };
     return fetch(url, { ...options, headers });
   };
 
+  // 1. FETCH GASTOS
+  const fetchFilteredExpenses = async () => {
+    let url = `${API_URL}/expenses`;
+    if (startDate && endDate) {
+      url += `?startDate=${startDate}&endDate=${endDate}`;
+    }
+    const res = await authedFetch(url);
+    const data = await res.json();
+    setExpenses(Array.isArray(data) ? data : []);
+  };
+
+  // 2. FETCH INGRESOS (Filtro Manual Frontend)
+  const fetchFilteredIncomes = async () => {
+    const res = await authedFetch(`${API_URL}/incomes`);
+    let data = await res.json();
+    data = Array.isArray(data) ? data : [];
+
+    if (startDate && endDate) {
+        const start = new Date(startDate + 'T00:00:00'); 
+        const end = new Date(endDate + 'T23:59:59');
+
+        data = data.filter(item => {
+            const itemDateStr = item.date || item.created_at;
+            if (!itemDateStr) return false;
+            const itemDate = new Date(itemDateStr);
+            return itemDate >= start && itemDate <= end;
+        });
+    }
+    setIncomes(data);
+  };
+
   const loadData = () => {
-    authedFetch(`${API_URL}/expenses`).then(r => r.json()).then(setExpenses);
-    authedFetch(`${API_URL}/incomes`).then(r => r.json()).then(setIncomes);
+    fetchFilteredExpenses(); 
+    fetchFilteredIncomes();  
     authedFetch(`${API_URL}/categories`).then(r => r.json()).then(setCategories);
     authedFetch(`${API_URL}/form-fields/expense`).then(r => r.json()).then(setExpenseFields);
     authedFetch(`${API_URL}/form-fields/income`).then(r => r.json()).then(setIncomeFields);
   };
 
-  useEffect(() => { if (token) loadData(); }, [token]);
+  useEffect(() => { 
+    if (token) loadData(); 
+  }, [token]);
 
-  // === LÓGICA DE REORDENAMIENTO (Drag & Drop) ===
-  const saveOrder = async (items) => {
-    const orderedIds = items.map(i => i.id);
-    await authedFetch(`${API_URL}/form-fields/reorder`, { method: 'PUT', body: JSON.stringify({ orderedIds }) });
+  const allCats = [...new Set(['Varios', ...categories.map(c => c.name)])];
+
+  // === MANEJADORES ===
+  const handleToggleCategory = (catName) => {
+    setHiddenCategories(prev => {
+      if (prev.includes(catName)) return prev.filter(c => c !== catName);
+      return [...prev, catName];
+    });
   };
 
-  const handleSort = (context) => {
-    const isExpense = context === 'expense';
-    let _items = [...(isExpense ? expenseFields : incomeFields)];
-    const draggedItemContent = _items.splice(dragItem.current, 1)[0];
-    _items.splice(dragOverItem.current, 0, draggedItemContent);
-    dragItem.current = null; dragOverItem.current = null;
-    if (isExpense) setExpenseFields(_items); else setIncomeFields(_items);
-    saveOrder(_items);
+  const handleFilterDate = (e) => {
+    e.preventDefault();
+    fetchFilteredExpenses();
+    fetchFilteredIncomes();
   };
 
-  const moveItem = (index, direction, context) => {
-    const isExpense = context === 'expense';
-    let _items = [...(isExpense ? expenseFields : incomeFields)];
-    if (direction === -1 && index === 0) return;
-    if (direction === 1 && index === _items.length - 1) return;
-    const temp = _items[index];
-    _items[index] = _items[index + direction];
-    _items[index + direction] = temp;
-    if (isExpense) setExpenseFields(_items); else setIncomeFields(_items);
-    saveOrder(_items);
+  const clearFilters = () => {
+    setStartDate('');
+    setEndDate('');
+    setHiddenCategories([]); 
+    authedFetch(`${API_URL}/expenses`).then(r => r.json()).then(setExpenses);
+    authedFetch(`${API_URL}/incomes`).then(r => r.json()).then(setIncomes);
   };
 
+  // === CÁLCULOS ===
+  const expensesFilteredByCat = expenses.filter(e => {
+      const cat = e.category || (e.custom_data && e.custom_data.category) || 'Varios';
+      return !hiddenCategories.includes(String(cat).trim());
+  });
+
+  const totalInc = incomes.reduce((sum, i) => sum + (parseFloat(i.amount) || 0), 0);
+  
+  const totalExp = expensesFilteredByCat.reduce((sum, e) => {
+    return sum + (parseFloat(e.amount) || 0);
+  }, 0);
+
+  const formatDate = (dateString) => {
+    if (!dateString) return '';
+    const date = new Date(dateString);
+    const userTimezoneOffset = date.getTimezoneOffset() * 60000;
+    const adjustedDate = new Date(date.getTime() + userTimezoneOffset);
+    return adjustedDate.toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
+  };
+
+  // === DRAG/DROP & CRUD ===
+  const saveOrder = async (items) => { const orderedIds = items.map(i => i.id); await authedFetch(`${API_URL}/form-fields/reorder`, { method: 'PUT', body: JSON.stringify({ orderedIds }) }); };
+  const handleSort = (context) => { const isExpense = context === 'expense'; let _items = [...(isExpense ? expenseFields : incomeFields)]; const draggedItemContent = _items.splice(dragItem.current, 1)[0]; _items.splice(dragOverItem.current, 0, draggedItemContent); dragItem.current = null; dragOverItem.current = null; if (isExpense) setExpenseFields(_items); else setIncomeFields(_items); saveOrder(_items); };
+  const moveItem = (index, direction, context) => { const isExpense = context === 'expense'; let _items = [...(isExpense ? expenseFields : incomeFields)]; if (direction === -1 && index === 0) return; if (direction === 1 && index === _items.length - 1) return; const temp = _items[index]; _items[index] = _items[index + direction]; _items[index + direction] = temp; if (isExpense) setExpenseFields(_items); else setIncomeFields(_items); saveOrder(_items); };
   const onDragStart = (e, index) => { dragItem.current = index; e.target.classList.add('dragging-item'); };
   const onDragEnter = (e, index) => { dragOverItem.current = index; };
   const onDragEnd = (e, context) => { e.target.classList.remove('dragging-item'); handleSort(context); };
+  const openEditModal = (item, type) => { const flatData = { ...item, ...(item.custom_data || {}) }; setEditingItem({ ...flatData, type }); setEditForm(flatData); };
+  const handleUpdate = async (e) => { e.preventDefault(); if (!editingItem) return; const url = editingItem.type === 'expense' ? `${API_URL}/expenses/${editingItem.id}` : `${API_URL}/incomes/${editingItem.id}`; const res = await authedFetch(url, { method: 'PUT', body: JSON.stringify(editForm) }); if (res.ok) { setEditingItem(null); loadData(); } else { alert('Error al actualizar.'); } };
+  const handleCreateChange = (e, context) => { const { name, value } = e.target; if (context === 'expense') setExpenseForm({ ...expenseForm, [name]: value }); else setIncomeForm({ ...incomeForm, [name]: value }); };
+  const handleEditChange = (e) => { setEditForm({ ...editForm, [e.target.name]: e.target.value }); };
+  const handleSubmit = async (e, context) => { e.preventDefault(); const url = context === 'expense' ? `${API_URL}/expenses` : `${API_URL}/incomes`; const body = context === 'expense' ? expenseForm : incomeForm; const res = await authedFetch(url, { method: 'POST', body: JSON.stringify(body) }); if (res.ok) { context === 'expense' ? setExpenseForm({}) : setIncomeForm({}); loadData(); } else { alert('Error al guardar.'); } };
+  const handleDelete = async (type, id) => { if (window.confirm('¿Borrar elemento?')) { await authedFetch(`${API_URL}/${type}/${id}`, { method: 'DELETE' }); loadData(); } };
+  const handleAddField = async (context) => { if (!newFieldName) return; await authedFetch(`${API_URL}/form-fields`, { method: 'POST', body: JSON.stringify({ context, label: newFieldName, type: 'text' }) }); setNewFieldName(''); loadData(); };
+  const handleDeleteField = async (id) => { if (window.confirm('¿Eliminar campo?')) { await authedFetch(`${API_URL}/form-fields/${id}`, { method: 'DELETE' }); loadData(); } };
+  const handleAddCategory = async (e) => { e.preventDefault(); if (!newCatName) return; await authedFetch(`${API_URL}/categories`, { method: 'POST', body: JSON.stringify({ name: newCatName }) }); setNewCatName(''); loadData(); };
+  const handleDeleteCategory = async (id) => { if (window.confirm('¿Borrar categoría?')) { await authedFetch(`${API_URL}/categories/${id}`, { method: 'DELETE' }); loadData(); } };
 
-  // ==========================================
-  // MANEJADORES DE DATOS (CRUD)
-  // ==========================================
-
-  // --- ABRIR MODAL DE EDICIÓN ---
-  const openEditModal = (item, type) => {
-    // Aplanamos los datos: sacamos lo que está en 'custom_data' al nivel raíz
-    // para que el formulario lo entienda fácilmente.
-    const flatData = {
-      ...item,
-      ...(item.custom_data || {})
-    };
-    setEditingItem({ ...flatData, type }); // Guardamos el tipo (expense/income) para saber a qué URL enviar
-    setEditForm(flatData); // Llenamos el formulario
-  };
-
-  // --- GUARDAR EDICIÓN ---
-  const handleUpdate = async (e) => {
-    e.preventDefault();
-    if (!editingItem) return;
-
-    const url = editingItem.type === 'expense' 
-      ? `${API_URL}/expenses/${editingItem.id}` 
-      : `${API_URL}/incomes/${editingItem.id}`;
-
-    const res = await authedFetch(url, { method: 'PUT', body: JSON.stringify(editForm) });
-    
-    if (res.ok) {
-      setEditingItem(null); // Cerrar modal
-      loadData(); // Recargar lista
-    } else {
-      alert('Error al actualizar.');
-    }
-  };
-
-  // --- CREAR NUEVO ---
-  const handleCreateChange = (e, context) => {
-    const { name, value } = e.target;
-    if (context === 'expense') setExpenseForm({ ...expenseForm, [name]: value });
-    else setIncomeForm({ ...incomeForm, [name]: value });
-  };
-
-  const handleEditChange = (e) => {
-    setEditForm({ ...editForm, [e.target.name]: e.target.value });
-  };
-
-  const handleSubmit = async (e, context) => {
-    e.preventDefault();
-    const url = context === 'expense' ? `${API_URL}/expenses` : `${API_URL}/incomes`;
-    const body = context === 'expense' ? expenseForm : incomeForm;
-    const res = await authedFetch(url, { method: 'POST', body: JSON.stringify(body) });
-    if (res.ok) {
-      context === 'expense' ? setExpenseForm({}) : setIncomeForm({});
-      loadData();
-    } else { alert('Error al guardar.'); }
-  };
-
-  const handleDelete = async (type, id) => {
-    if (window.confirm('¿Borrar elemento?')) { await authedFetch(`${API_URL}/${type}/${id}`, { method: 'DELETE' }); loadData(); }
-  };
-
-  // --- CONFIGURACIÓN ---
-  const handleAddField = async (context) => {
-    if (!newFieldName) return;
-    await authedFetch(`${API_URL}/form-fields`, { method: 'POST', body: JSON.stringify({ context, label: newFieldName, type: 'text' }) });
-    setNewFieldName(''); loadData();
-  };
-  const handleDeleteField = async (id) => {
-    if (window.confirm('¿Ocultar/Eliminar campo?')) { await authedFetch(`${API_URL}/form-fields/${id}`, { method: 'DELETE' }); loadData(); }
-  };
-  const handleAddCategory = async (e) => {
-    e.preventDefault();
-    if (!newCatName) return;
-    await authedFetch(`${API_URL}/categories`, { method: 'POST', body: JSON.stringify({ name: newCatName }) });
-    setNewCatName(''); loadData();
-  };
-  const handleDeleteCategory = async (id) => {
-    if (window.confirm('¿Borrar categoría?')) { await authedFetch(`${API_URL}/categories/${id}`, { method: 'DELETE' }); loadData(); }
-  };
-
-  // Helpers
-  const getFieldLabel = (key, context) => {
-    const fields = context === 'expense' ? expenseFields : incomeFields;
-    const found = fields.find(f => f.field_key === key);
-    return found ? found.label : key;
-  };
-  const allCats = [...new Set(['Varios', ...categories.map(c => c.name)])];
-  const totalInc = incomes.reduce((sum, i) => sum + parseFloat(i.amount), 0);
-  const totalExp = expenses.reduce((sum, e) => sum + parseFloat(e.amount), 0);
-
-  // RENDERIZADOR DE FORMULARIOS (Reutilizable para Crear y Editar)
+  // === RENDERS ===
   const renderForm = (fields, context, state, handleChange) => (
     <>
       {fields.map(field => (
@@ -177,8 +161,8 @@ function ExpenseManager({ token, onLogout }) {
               {allCats.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           ) : (
-            <input
-              type={field.field_key === 'amount' ? 'number' : 'text'}
+            <input 
+              type={field.field_key === 'amount' ? 'number' : (field.field_key === 'date' ? 'date' : 'text')}
               step={field.field_key === 'amount' ? '0.01' : undefined}
               name={field.field_key}
               value={state[field.field_key] || ''}
@@ -192,21 +176,21 @@ function ExpenseManager({ token, onLogout }) {
     </>
   );
 
-  // === RENDERIZADOR DE ITEMS EN LISTA (Diseño Limpio) ===
   const renderItemContent = (item, type) => {
-    // Juntamos todos los datos en un solo objeto para iterar
     const allData = { ...item, ...item.custom_data };
-    
-    // Obtenemos los campos configurados para saber el orden correcto
     const fieldsConfig = type === 'expense' ? expenseFields : incomeFields;
+    const dateValue = allData.date || allData.created_at || item.date || item.created_at;
 
     return (
       <div className="item-details">
-        {/* Iteramos sobre la configuración para respetar el orden del usuario */}
+        {dateValue && (
+            <div style={{ fontSize: '0.85rem', color: '#7f8c8d', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                📅 <span>{formatDate(dateValue)}</span>
+            </div>
+        )}
         {fieldsConfig.map(field => {
           const value = allData[field.field_key];
-          if (!value) return null; // Si no hay dato, no mostramos nada
-
+          if (!value || field.field_key === 'date') return null; 
           return (
             <div key={field.id} className="field-row">
               <span className="field-label">{field.label}:</span>
@@ -218,12 +202,10 @@ function ExpenseManager({ token, onLogout }) {
     );
   };
 
-  // === VISTA: CONFIGURACIÓN ===
   if (view.startsWith('settings_')) {
     const isExpense = view === 'settings_expense';
     const context = isExpense ? 'expense' : 'income';
     const fields = isExpense ? expenseFields : incomeFields;
-
     return (
       <div className="content settings-view">
         <header className="settings-header">
@@ -232,26 +214,17 @@ function ExpenseManager({ token, onLogout }) {
         </header>
         <div className="settings-grid">
           <div className="settings-card">
-            <h3>Orden de Campos</h3>
+            <h3>Campos del Formulario</h3>
             <ul className="sortable-list">
               {fields.map((f, index) => (
                 <li key={f.id} draggable onDragStart={(e) => onDragStart(e, index)} onDragEnter={(e) => dragOverItem.current = index} onDragEnd={(e) => onDragEnd(e, context)} onDragOver={(e) => e.preventDefault()} className="draggable-item">
                   <div className="drag-handle">☰</div>
-                  <div className="field-info"><strong>{f.label}</strong>{f.is_core && <small>(Default)</small>}</div>
-                  <div className="field-actions">
-                    <div className="arrow-controls">
-                      <button onClick={() => moveItem(index, -1, context)} disabled={index===0}>▲</button>
-                      <button onClick={() => moveItem(index, 1, context)} disabled={index===fields.length-1}>▼</button>
-                    </div>
-                    {f.field_key !== 'amount' ? <button onClick={() => handleDeleteField(f.id)} className="delete-btn">&times;</button> : <span style={{opacity:0.3, padding:'0 10px'}}>🔒</span>}
-                  </div>
+                  <div><strong>{f.label}</strong></div>
+                  <div className="arrow-controls"><button onClick={() => moveItem(index, -1, context)} disabled={index === 0}>▲</button><button onClick={() => moveItem(index, 1, context)} disabled={index === fields.length - 1}>▼</button>{f.field_key !== 'amount' && <button onClick={() => handleDeleteField(f.id)} className="delete-btn">&times;</button>}</div>
                 </li>
               ))}
             </ul>
-            <div className="mini-form" style={{marginTop: 20}}>
-              <input value={newFieldName} onChange={e => setNewFieldName(e.target.value)} placeholder="Nuevo Campo..." />
-              <button onClick={() => handleAddField(context)}>+</button>
-            </div>
+            <div className="mini-form" style={{ marginTop: 20 }}><input value={newFieldName} onChange={e => setNewFieldName(e.target.value)} placeholder="Nuevo Campo..." /><button onClick={() => handleAddField(context)}>+</button></div>
           </div>
           {isExpense && fields.find(f => f.field_key === 'category') && (
             <div className="settings-card">
@@ -265,29 +238,95 @@ function ExpenseManager({ token, onLogout }) {
     );
   }
 
-  // === VISTA: DASHBOARD ===
+  // === DASHBOARD ===
   return (
     <>
       <header>
-        <h1>Mi Gestor 💸</h1>
+        <h1>Mi Bolsillo</h1>
         <button onClick={onLogout} className="logout-btn">Cerrar Sesión</button>
       </header>
-      
-      <div className="balance-bar">
+
+      {/* === 1. BALANCE (STICKY - Color arreglado a #d7ecf2) === */}
+      <div className="balance-bar" style={{ 
+          position: 'sticky', 
+          top: 0, 
+          zIndex: 1000, 
+          // Usamos el RGB de #d7ecf2 (215, 236, 242) con un poco de transparencia
+          background: 'rgba(215, 236, 242, 0.98)', 
+          backdropFilter: 'blur(5px)',
+          padding: '10px 0', 
+          margin: '0 0 20px 0',
+          boxShadow: '0 4px 10px rgba(0,0,0,0.08)' 
+      }}>
         <div className="balance-card income"><span>Ingresos</span><span>+${totalInc.toFixed(2)}</span></div>
         <div className="balance-card expense"><span>Gastos</span><span>-${totalExp.toFixed(2)}</span></div>
-        <div className="balance-card balance"><span>Balance</span><span style={{color:(totalInc - totalExp)>=0?'#27ae60':'#c0392b'}}>${(totalInc - totalExp).toFixed(2)}</span></div>
+        <div className="balance-card balance">
+          <span>Balance</span>
+          <span style={{ color: (totalInc - totalExp) >= 0 ? '#27ae60' : '#c0392b' }}>
+            ${(totalInc - totalExp).toFixed(2)}
+          </span>
+        </div>
+      </div>
+
+      {/* 2. FILTRO DE FECHAS */}
+      <div style={{ 
+          background: 'white', 
+          padding: '15px 20px', 
+          borderRadius: '8px', 
+          margin: '20px 0', 
+          width: '100%',            
+          boxSizing: 'border-box',
+          boxShadow: '0 2px 5px rgba(0,0,0,0.05)',
+          display: 'flex',          
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '15px'
+      }}>
+          <strong style={{ whiteSpace: 'nowrap', fontSize: '1rem' }}>📅 Filtrar por Fecha:</strong>
+          
+          <input 
+            type="date" 
+            value={startDate} 
+            onChange={e => setStartDate(e.target.value)} 
+            style={{ flex: 1, padding: '10px', border: '1px solid #ddd', borderRadius: '4px', minWidth: '130px' }} 
+          />
+          
+          <span style={{color: '#999'}}>—</span>
+
+          <input 
+            type="date" 
+            value={endDate} 
+            onChange={e => setEndDate(e.target.value)} 
+            style={{ flex: 1, padding: '10px', border: '1px solid #ddd', borderRadius: '4px', minWidth: '130px' }} 
+          />
+            
+          <button onClick={handleFilterDate} style={{ background: '#3498db', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '4px', cursor: 'pointer' }}>
+            Ver
+          </button>
+            
+          {(startDate || endDate) && (
+              <button onClick={clearFilters} style={{ background: '#95a5a6', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '4px', cursor: 'pointer' }}>
+                  Limpiar
+              </button>
+          )}
       </div>
 
       <div className="content">
         <div className="forms-column">
           <form onSubmit={(e) => handleSubmit(e, 'income')} className="income-form">
-            <div className="form-header"><h2>Añadir Ingreso</h2><button type="button" className="gear-btn" onClick={() => setView('settings_income')}>⚙️</button></div>
+            <div className="form-header">
+              <h2>Añadir Ingreso</h2>
+              <button type="button" className="gear-btn" onClick={() => setView('settings_income')}>⚙️</button>
+            </div>
             {renderForm(incomeFields, 'income', incomeForm, handleCreateChange)}
             <button type="submit">Guardar</button>
           </form>
-          <form onSubmit={(e) => handleSubmit(e, 'expense')} className="expense-form">
-            <div className="form-header"><h2>Nuevo Gasto</h2><button type="button" className="gear-btn" onClick={() => setView('settings_expense')}>⚙️</button></div>
+          
+          <form onSubmit={(e) => handleSubmit(e, 'expense')} className="expense-form" style={{ marginTop: '20px' }}>
+            <div className="form-header">
+              <h2>Nuevo Gasto</h2>
+              <button type="button" className="gear-btn" onClick={() => setView('settings_expense')}>⚙️</button>
+            </div>
             {renderForm(expenseFields, 'expense', expenseForm, handleCreateChange)}
             <button type="submit">Guardar</button>
           </form>
@@ -295,20 +334,29 @@ function ExpenseManager({ token, onLogout }) {
 
         <div className="lists-column">
           <div className="income-list">
-            <h3>Ingresos</h3>
-            {incomes.map(inc => (
-              <article key={inc.id} className="income-card">
-                {renderItemContent(inc, 'income')}
-                <div className="card-actions">
-                  <button onClick={() => openEditModal(inc, 'income')} className="edit-btn">✏️</button>
-                  <button onClick={() => handleDelete('incomes', inc.id)} className="delete-btn">&times;</button>
-                </div>
-              </article>
-            ))}
+             <h3>Ingresos Recientes {startDate ? '(Filtrados)' : ''}</h3>
+             {incomes.length === 0 ? (
+               <p style={{ color: '#999', textAlign: 'center', padding: '20px' }}>No hay ingresos en este rango</p>
+             ) : null}
+             {incomes.map(inc => (
+                <article key={inc.id} className="income-card">
+                  {renderItemContent(inc, 'income')}
+                  <div className="card-actions">
+                    <button onClick={() => openEditModal(inc, 'income')} className="edit-btn">✏️</button>
+                    <button onClick={() => handleDelete('incomes', inc.id)} className="delete-btn">&times;</button>
+                  </div>
+                </article>
+             ))}
           </div>
-          <div className="expense-list">
-            <h3>Gastos</h3>
-            {expenses.map(exp => (
+          
+          <div className="expense-list" style={{ marginTop: '20px' }}>
+            <h3>Gastos Recientes {hiddenCategories.length > 0 || startDate ? '(Filtrados)' : ''}</h3>
+            {expensesFilteredByCat.length === 0 ? (
+              <p style={{ color: '#999', textAlign: 'center', padding: '20px' }}>
+                No hay gastos para mostrar
+              </p>
+            ) : null}
+            {expensesFilteredByCat.map(exp => (
               <article key={exp.id} className="expense-card">
                 {renderItemContent(exp, 'expense')}
                 <div className="card-actions">
@@ -321,21 +369,88 @@ function ExpenseManager({ token, onLogout }) {
         </div>
       </div>
 
-      {/* === MODAL DE EDICIÓN === */}
+      {/* 3. VISUALIZACIÓN Y FILTROS ABAJO */}
+      <div style={{ marginTop: '30px', marginBottom: '40px' }}>
+        <button 
+            className="toggle-chart-btn" 
+            onClick={() => setShowChart(!showChart)}
+            style={{ 
+            width: '100%', 
+            padding: '15px', 
+            fontSize: '1.1rem', 
+            backgroundColor: '#34495e', 
+            color: 'white', 
+            border: 'none', 
+            borderRadius: '8px', 
+            cursor: 'pointer',
+            marginBottom: '15px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center'
+            }}
+        >
+            <span>📊 Visualización y Categorías</span>
+            <span>{showChart ? '🔼' : '🔽'}</span>
+        </button>
+
+        {showChart && (
+            <div className="chart-section" style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.05)' }}>
+                <div style={{ marginBottom: '20px', paddingBottom: '15px', borderBottom: '1px solid #eee' }}>
+                    <div style={{display:'flex', flexDirection:'column', gap: '5px'}}>
+                        <strong>🏷️ Categorías Visibles:</strong>
+                        <div style={{ 
+                            display: 'flex', 
+                            flexWrap: 'wrap', 
+                            gap: '10px', 
+                            marginTop: '5px',
+                            background: '#f9f9f9',
+                            padding: '10px',
+                            borderRadius: '5px',
+                            border: '1px solid #eee'
+                        }}>
+                            {allCats.map(cat => {
+                              const isChecked = !hiddenCategories.includes(cat);
+                              return (
+                                <label key={cat} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.95rem', userSelect: 'none', opacity: isChecked ? 1 : 0.6 }}>
+                                    <input 
+                                        type="checkbox" 
+                                        checked={isChecked}
+                                        onChange={() => handleToggleCategory(cat)}
+                                    />
+                                    <span style={{ textDecoration: isChecked ? 'none' : 'line-through' }}>{cat}</span>
+                                </label>
+                              );
+                            })}
+                            {allCats.length === 0 && <span style={{color: '#999'}}>No hay categorías aún</span>}
+                        </div>
+                    </div>
+                    {hiddenCategories.length > 0 && (
+                          <button onClick={() => setHiddenCategories([])} style={{ marginTop: '10px', background: 'transparent', color: '#3498db', border: '1px solid #3498db', padding: '5px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.9rem' }}>
+                            Mostrar Todas
+                          </button>
+                    )}
+                </div>
+
+                <ExpensesChart 
+                    expenses={expenses} 
+                    incomes={incomes} 
+                    hiddenCategories={hiddenCategories} 
+                    onToggleCategory={handleToggleCategory}
+                    currentTotalExp={totalExp} 
+                />
+            </div>
+        )}
+      </div>
+
       {editingItem && (
         <div className="modal-overlay">
           <div className="modal-content">
             <h2>Editar {editingItem.type === 'expense' ? 'Gasto' : 'Ingreso'}</h2>
             <form onSubmit={handleUpdate}>
-              {renderForm(
-                editingItem.type === 'expense' ? expenseFields : incomeFields, 
-                editingItem.type, 
-                editForm, 
-                handleEditChange
-              )}
+              {renderForm(editingItem.type === 'expense' ? expenseFields : incomeFields, editingItem.type, editForm, handleEditChange)}
               <div className="modal-buttons">
                 <button type="button" onClick={() => setEditingItem(null)} className="cancel-btn">Cancelar</button>
-                <button type="submit" className="save-btn">Guardar Cambios</button>
+                <button type="submit" className="save-btn">Guardar</button>
               </div>
             </form>
           </div>

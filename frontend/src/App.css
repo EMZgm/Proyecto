@@ -27,7 +27,17 @@ header {
 
 header h1 {
   color: #2c3e50;
+  
+  /* Opcional: Si separas las letras, ponerlas en mayúscula suele verse muy bien */
+  text-transform: uppercase;
   margin: 0;
+  /* Fuente moderna y gruesa */
+  font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 1.8rem;
+  /* Letras un poco más juntas para estilo moderno */
+  letter-spacing: 2px; 
+  /* Sombra sutil para despegarlo del fondo */
+  text-shadow: 2px 2px 0px rgba(0,0,0,0.1);
 }
 
 .logout-btn {
