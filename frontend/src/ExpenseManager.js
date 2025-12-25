@@ -15,7 +15,7 @@ function ExpenseManager({ token, onLogout }) {
   // Datos
   const [expenses, setExpenses] = useState([]);
   const [incomes, setIncomes] = useState([]);
-  const [categories, setCategories] = useState([]); // Array vacío inicial
+  const [categories, setCategories] = useState([]); 
   const [expenseFields, setExpenseFields] = useState([]);
   const [incomeFields, setIncomeFields] = useState([]);
 
@@ -30,7 +30,7 @@ function ExpenseManager({ token, onLogout }) {
   const dragItem = useRef();
   const dragOverItem = useRef();
 
-  // === FETCH INTELIGENTE (Detecta sesión caducada) ===
+  // === FETCH INTELIGENTE ===
   const authedFetch = async (url, options = {}) => {
     const headers = { 
       ...options.headers, 
@@ -40,15 +40,11 @@ function ExpenseManager({ token, onLogout }) {
     
     try {
       const response = await fetch(url, { ...options, headers });
-      
-      // SI EL TOKEN NO SIRVE (401 o 403), SACAMOS AL USUARIO
       if (response.status === 401 || response.status === 403) {
-        console.warn("Sesión expirada o inválida. Cerrando sesión...");
-        localStorage.removeItem('token'); // Limpieza extra
-        onLogout(); // Sacar al usuario al Login
-        return null; // Detener ejecución
+        localStorage.removeItem('token'); 
+        onLogout(); 
+        return null; 
       }
-      
       return response;
     } catch (error) {
       console.error("Error de red:", error);
@@ -62,7 +58,7 @@ function ExpenseManager({ token, onLogout }) {
     if (startDate && endDate) url += `?startDate=${startDate}&endDate=${endDate}`;
     
     const res = await authedFetch(url);
-    if (!res) return; // Si falló la autenticación, paramos
+    if (!res) return;
 
     if (res.ok) {
         const data = await res.json();
@@ -70,7 +66,7 @@ function ExpenseManager({ token, onLogout }) {
     }
   };
 
-  // 2. FETCH INGRESOS
+  // 2. FETCH INGRESOS (CORREGIDO: Comparación de String simple)
   const fetchFilteredIncomes = async () => {
     const res = await authedFetch(`${API_URL}/incomes`);
     if (!res) return;
@@ -80,13 +76,17 @@ function ExpenseManager({ token, onLogout }) {
         data = Array.isArray(data) ? data : [];
 
         if (startDate && endDate) {
-            const start = new Date(startDate + 'T00:00:00'); 
-            const end = new Date(endDate + 'T23:59:59');
+            // FILTRO DE FECHAS "A PRUEBA DE BALAS"
+            // Comparamos cadenas de texto 'YYYY-MM-DD' directamente.
             data = data.filter(item => {
-                const itemDateStr = item.date || item.created_at;
-                if (!itemDateStr) return false;
-                const itemDate = new Date(itemDateStr);
-                return itemDate >= start && itemDate <= end;
+                const itemRaw = item.date || item.created_at;
+                if (!itemRaw) return false;
+                
+                // Cortamos la parte de la hora (todo después de la T)
+                const itemDateStr = itemRaw.split('T')[0];
+                
+                // Comparación alfanumérica simple (funciona perfecto con fechas ISO)
+                return itemDateStr >= startDate && itemDateStr <= endDate;
             });
         }
         setIncomes(data);
@@ -97,14 +97,12 @@ function ExpenseManager({ token, onLogout }) {
     fetchFilteredExpenses(); 
     fetchFilteredIncomes();  
     
-    // Categorías (Manejo robusto)
     const catRes = await authedFetch(`${API_URL}/categories`);
     if (catRes && catRes.ok) {
         const data = await catRes.json();
         setCategories(Array.isArray(data) ? data : []);
     }
 
-    // Campos
     const expFieldRes = await authedFetch(`${API_URL}/form-fields/expense`);
     if (expFieldRes && expFieldRes.ok) setExpenseFields(await expFieldRes.json());
 
@@ -116,8 +114,6 @@ function ExpenseManager({ token, onLogout }) {
     if (token) loadData(); 
   }, [token]);
 
-  // === AQUÍ ESTABA EL ERROR DEL MAP ===
-  // Aseguramos que categories sea un array antes de hacer map
   const safeCategories = Array.isArray(categories) ? categories : [];
   const allCats = [...new Set(['Varios', ...safeCategories.map(c => c.name)])];
 
@@ -139,7 +135,12 @@ function ExpenseManager({ token, onLogout }) {
     setStartDate('');
     setEndDate('');
     setHiddenCategories([]); 
-    loadData(); 
+    // Truco: Llamar a loadData recargará todo limpio porque startDate/endDate 
+    // aún no se han limpiado dentro del closure de fetchFilteredExpenses en este ciclo,
+    // pero si llamamos a las funciones fetch individuales SIN argumentos, funcionaría mejor.
+    // Para simplificar, forzamos recarga directa:
+    authedFetch(`${API_URL}/expenses`).then(r => r.json()).then(d => setExpenses(Array.isArray(d) ? d : []));
+    authedFetch(`${API_URL}/incomes`).then(r => r.json()).then(d => setIncomes(Array.isArray(d) ? d : []));
   };
 
   // === CÁLCULOS ===
@@ -156,12 +157,20 @@ function ExpenseManager({ token, onLogout }) {
     return sum + (parseFloat(e.amount) || 0);
   }, 0);
 
+  // === FORMATEO DE FECHA (CORREGIDO: Sin trucos de zona horaria) ===
   const formatDate = (dateString) => {
     if (!dateString) return '';
-    const date = new Date(dateString);
-    const userTimezoneOffset = date.getTimezoneOffset() * 60000;
-    const adjustedDate = new Date(date.getTime() + userTimezoneOffset);
-    return adjustedDate.toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
+    // Paso 1: Obtener solo la parte de la fecha YYYY-MM-DD
+    const isoDate = dateString.split('T')[0];
+    
+    // Paso 2: Separar año, mes y día
+    const [year, month, day] = isoDate.split('-');
+
+    // Paso 3: Crear fecha local usando el constructor (Año, Mes-1, Día)
+    // Esto evita que JS intente convertir a UTC y cambie el día.
+    const date = new Date(year, month - 1, day);
+
+    return date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
   };
 
   // === DRAG/DROP & CRUD ===
@@ -282,7 +291,7 @@ function ExpenseManager({ token, onLogout }) {
         <h1 style={{ 
             fontFamily: "'Segoe UI', sans-serif", fontSize: '1.8rem', fontWeight: '800', color: '#2c3e50', letterSpacing: '4px', textTransform: 'uppercase', margin: 0, textShadow: '1px 1px 2px rgba(0,0,0,0.1)'
         }}>
-          Finza 💸
+          Mi bolsillo
         </h1>
         <button onClick={onLogout} className="logout-btn">Cerrar Sesión</button>
       </header>
