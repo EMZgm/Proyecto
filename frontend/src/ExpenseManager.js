@@ -24,13 +24,15 @@ function ExpenseManager({ token, onLogout }) {
   const [incomeForm, setIncomeForm] = useState({});
   const [editingItem, setEditingItem] = useState(null);
   const [editForm, setEditForm] = useState({});
+  
+  // Configuración
   const [newFieldName, setNewFieldName] = useState('');
   const [newCatName, setNewCatName] = useState('');
 
   const dragItem = useRef();
   const dragOverItem = useRef();
 
-  // === FETCH INTELIGENTE ===
+  // === FETCH HELPER ===
   const authedFetch = async (url, options = {}) => {
     const headers = { 
       ...options.headers, 
@@ -52,31 +54,40 @@ function ExpenseManager({ token, onLogout }) {
     }
   };
 
-  // === AYUDA: OBTENER FECHA LOCAL STRING (YYYY-MM-DD) ===
-  // Esta función es la clave. Convierte la fecha del servidor a TU fecha real.
+  // === FECHA LOCAL (FIX ZONA HORARIA) ===
   const getLocalDateYMD = (dateString) => {
     if (!dateString) return '';
     const date = new Date(dateString);
-    // getFullYear, getMonth, getDate usan la hora de tu PC (Ecuador)
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
+    // USAMOS UTC AQUÍ TAMBIÉN para que no reste 5 horas al editar
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(date.getUTCDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
   };
 
-  // 1. FETCH GASTOS (Filtrado 100% Local para precisión)
+  const formatDate = (dateString) => {
+    if (!dateString) return '';
+    const date = new Date(dateString);
+    // El truco mágico: timeZone: 'UTC'. 
+    // Esto obliga a mostrar la fecha literal sin restar tu zona horaria.
+    return date.toLocaleDateString('es-ES', { 
+        day: 'numeric', 
+        month: 'short', 
+        year: 'numeric',
+        timeZone: 'UTC' 
+    });
+  };
+
+  // === CARGA DE DATOS ===
   const fetchFilteredExpenses = async () => {
-    // Traemos TODO del servidor y filtramos aquí para evitar errores de zona horaria del backend
-    const url = `${API_URL}/expenses`; 
-    
-    const res = await authedFetch(url);
+    const res = await authedFetch(`${API_URL}/expenses`);
     if (!res) return;
 
     if (res.ok) {
         let data = await res.json();
         data = Array.isArray(data) ? data : [];
 
-        // Filtro manual en el cliente
+        // Filtrado cliente para evitar problemas de zona horaria server-side
         if (startDate && endDate) {
             data = data.filter(item => {
                 const itemDateStr = getLocalDateYMD(item.date || item.created_at);
@@ -87,7 +98,6 @@ function ExpenseManager({ token, onLogout }) {
     }
   };
 
-  // 2. FETCH INGRESOS (Filtrado 100% Local para precisión)
   const fetchFilteredIncomes = async () => {
     const res = await authedFetch(`${API_URL}/incomes`);
     if (!res) return;
@@ -98,7 +108,6 @@ function ExpenseManager({ token, onLogout }) {
 
         if (startDate && endDate) {
             data = data.filter(item => {
-                // Usamos la misma función de conversión local
                 const itemDateStr = getLocalDateYMD(item.date || item.created_at);
                 return itemDateStr >= startDate && itemDateStr <= endDate;
             });
@@ -126,12 +135,13 @@ function ExpenseManager({ token, onLogout }) {
 
   useEffect(() => { 
     if (token) loadData(); 
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
+  // === HELPERS DE CÁLCULO ===
   const safeCategories = Array.isArray(categories) ? categories : [];
   const allCats = [...new Set(['Varios', ...safeCategories.map(c => c.name)])];
 
-  // === MANEJADORES ===
   const handleToggleCategory = (catName) => {
     setHiddenCategories(prev => {
       if (prev.includes(catName)) return prev.filter(c => c !== catName);
@@ -149,12 +159,11 @@ function ExpenseManager({ token, onLogout }) {
     setStartDate('');
     setEndDate('');
     setHiddenCategories([]); 
-    // Recarga limpia
+    // Recarga limpia sin filtros
     authedFetch(`${API_URL}/expenses`).then(r => r.json()).then(d => setExpenses(Array.isArray(d) ? d : []));
     authedFetch(`${API_URL}/incomes`).then(r => r.json()).then(d => setIncomes(Array.isArray(d) ? d : []));
   };
 
-  // === CÁLCULOS ===
   const safeExpenses = Array.isArray(expenses) ? expenses : [];
   const expensesFilteredByCat = safeExpenses.filter(e => {
       const cat = e.category || (e.custom_data && e.custom_data.category) || 'Varios';
@@ -168,34 +177,22 @@ function ExpenseManager({ token, onLogout }) {
     return sum + (parseFloat(e.amount) || 0);
   }, 0);
 
-  // === FORMATEO DE FECHA VISUAL ===
-  const formatDate = (dateString) => {
-    if (!dateString) return '';
-    const date = new Date(dateString);
-    // Usamos toLocaleDateString que usa la zona horaria del navegador automáticamente
-    return date.toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' });
-  };
-
-  // === DRAG/DROP & CRUD ===
+  // === DRAG & DROP / CONFIG ===
   const saveOrder = async (items) => { const orderedIds = items.map(i => i.id); await authedFetch(`${API_URL}/form-fields/reorder`, { method: 'PUT', body: JSON.stringify({ orderedIds }) }); };
   const handleSort = (context) => { const isExpense = context === 'expense'; let _items = [...(isExpense ? expenseFields : incomeFields)]; const draggedItemContent = _items.splice(dragItem.current, 1)[0]; _items.splice(dragOverItem.current, 0, draggedItemContent); dragItem.current = null; dragOverItem.current = null; if (isExpense) setExpenseFields(_items); else setIncomeFields(_items); saveOrder(_items); };
   const moveItem = (index, direction, context) => { const isExpense = context === 'expense'; let _items = [...(isExpense ? expenseFields : incomeFields)]; if (direction === -1 && index === 0) return; if (direction === 1 && index === _items.length - 1) return; const temp = _items[index]; _items[index] = _items[index + direction]; _items[index + direction] = temp; if (isExpense) setExpenseFields(_items); else setIncomeFields(_items); saveOrder(_items); };
   const onDragStart = (e, index) => { dragItem.current = index; e.target.classList.add('dragging-item'); };
-  const onDragEnter = (e, index) => { dragOverItem.current = index; };
   const onDragEnd = (e, context) => { e.target.classList.remove('dragging-item'); handleSort(context); };
+  
+  // === CRUD ===
   const openEditModal = (item, type) => { const flatData = { ...item, ...(item.custom_data || {}) }; setEditingItem({ ...flatData, type }); setEditForm(flatData); };
   
   const handleUpdate = async (e) => { 
       e.preventDefault(); 
       if (!editingItem) return; 
       const body = { ...editForm };
+      if (!body.date) body.date = getLocalDateYMD(new Date());
       
-      // Si editamos y no hay fecha, poner la de hoy
-      if (!body.date) {
-         body.date = getLocalDateYMD(new Date());
-      }
-      
-      // Aseguramos que si el usuario eligió fecha en el input date, se mande tal cual
       const url = editingItem.type === 'expense' ? `${API_URL}/expenses/${editingItem.id}` : `${API_URL}/incomes/${editingItem.id}`; 
       const res = await authedFetch(url, { method: 'PUT', body: JSON.stringify(body) }); 
       if (res && res.ok) { setEditingItem(null); loadData(); } 
@@ -209,19 +206,13 @@ function ExpenseManager({ token, onLogout }) {
       e.preventDefault(); 
       const url = context === 'expense' ? `${API_URL}/expenses` : `${API_URL}/incomes`; 
       const body = context === 'expense' ? { ...expenseForm } : { ...incomeForm };
-
-      // Si no puso fecha, calculamos la local
-      if (!body.date) {
-         body.date = getLocalDateYMD(new Date());
-      }
+      if (!body.date) body.date = getLocalDateYMD(new Date());
 
       const res = await authedFetch(url, { method: 'POST', body: JSON.stringify(body) }); 
       if (res && res.ok) { 
           context === 'expense' ? setExpenseForm({}) : setIncomeForm({}); 
           loadData(); 
-      } else { 
-          alert('Error al guardar.'); 
-      } 
+      } else { alert('Error al guardar.'); } 
   };
 
   const handleDelete = async (type, id) => { if (window.confirm('¿Borrar elemento?')) { await authedFetch(`${API_URL}/${type}/${id}`, { method: 'DELETE' }); loadData(); } };
@@ -267,7 +258,7 @@ function ExpenseManager({ token, onLogout }) {
     return (
       <div className="item-details">
         {dateValue && (
-            <div style={{ fontSize: '0.85rem', color: '#7f8c8d', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <div className="item-date">
                 📅 <span>{formatDate(dateValue)}</span>
             </div>
         )}
@@ -285,6 +276,7 @@ function ExpenseManager({ token, onLogout }) {
     );
   };
 
+  // VISTA SETTINGS
   if (view.startsWith('settings_')) {
     const isExpense = view === 'settings_expense';
     const context = isExpense ? 'expense' : 'income';
@@ -304,17 +296,17 @@ function ExpenseManager({ token, onLogout }) {
               {safeFields.map((f, index) => (
                 <li key={f.id} draggable onDragStart={(e) => onDragStart(e, index)} onDragEnter={(e) => dragOverItem.current = index} onDragEnd={(e) => onDragEnd(e, context)} onDragOver={(e) => e.preventDefault()} className="draggable-item">
                   <div className="drag-handle">☰</div>
-                  <div><strong>{f.label}</strong></div>
-                  <div className="arrow-controls"><button onClick={() => moveItem(index, -1, context)} disabled={index === 0}>▲</button><button onClick={() => moveItem(index, 1, context)} disabled={index === fields.length - 1}>▼</button>{f.field_key !== 'amount' && <button onClick={() => handleDeleteField(f.id)} className="delete-btn">&times;</button>}</div>
+                  <div className="field-info"><strong>{f.label}</strong></div>
+                  <div className="arrow-controls"><button onClick={() => moveItem(index, -1, context)} disabled={index === 0}>▲</button><button onClick={() => moveItem(index, 1, context)} disabled={index === fields.length - 1}>▼</button>{f.field_key !== 'amount' && <button onClick={() => handleDeleteField(f.id)} className="delete-btn" style={{width:'20px', height:'20px', fontSize:'0.7rem', marginLeft: '5px'}}>&times;</button>}</div>
                 </li>
               ))}
             </ul>
-            <div className="mini-form" style={{ marginTop: 20 }}><input value={newFieldName} onChange={e => setNewFieldName(e.target.value)} placeholder="Nuevo Campo..." /><button onClick={() => handleAddField(context)}>+</button></div>
+            <div className="mini-form"><input value={newFieldName} onChange={e => setNewFieldName(e.target.value)} placeholder="Nuevo Campo..." /><button onClick={() => handleAddField(context)}>+</button></div>
           </div>
           {isExpense && safeFields.find(f => f.field_key === 'category') && (
             <div className="settings-card">
               <h3>Categorías</h3>
-              <ul>{safeCategories.map(c => <li key={c.id}>{c.name} <button onClick={() => handleDeleteCategory(c.id)} className="delete-btn">&times;</button></li>)}</ul>
+              <ul>{safeCategories.map(c => <li key={c.id}>{c.name} <button onClick={() => handleDeleteCategory(c.id)} className="delete-btn" style={{width:'24px', height:'24px'}}>&times;</button></li>)}</ul>
               <form onSubmit={handleAddCategory} className="mini-form"><input value={newCatName} onChange={e => setNewCatName(e.target.value)} placeholder="Nueva..." /><button type="submit">+</button></form>
             </div>
           )}
@@ -323,38 +315,34 @@ function ExpenseManager({ token, onLogout }) {
     );
   }
 
-  // === DASHBOARD ===
+  // VISTA DASHBOARD
   return (
     <>
       <header>
-        <h1 style={{ 
-            fontFamily: "'Segoe UI', sans-serif", fontSize: '1.8rem', fontWeight: '800', color: '#2c3e50', letterSpacing: '4px', textTransform: 'uppercase', margin: 0, textShadow: '1px 1px 2px rgba(0,0,0,0.1)'
-        }}>
-          Mi bolsillo
-        </h1>
+        <h1>Finza 💸</h1>
         <button onClick={onLogout} className="logout-btn">Cerrar Sesión</button>
       </header>
 
       {/* BALANCE */}
-      <div className="balance-bar" style={{ position: 'sticky', top: 0, zIndex: 1000, background: 'rgba(215, 236, 242, 0.98)', backdropFilter: 'blur(5px)', padding: '10px 0', margin: '0 0 20px 0', boxShadow: '0 4px 10px rgba(0,0,0,0.08)' }}>
+      <div className="balance-bar">
         <div className="balance-card income"><span>Ingresos</span><span>+${totalInc.toFixed(2)}</span></div>
         <div className="balance-card expense"><span>Gastos</span><span>-${totalExp.toFixed(2)}</span></div>
         <div className="balance-card balance">
           <span>Balance</span>
-          <span style={{ color: (totalInc - totalExp) >= 0 ? '#27ae60' : '#c0392b' }}>
+          <span style={{ color: (totalInc - totalExp) >= 0 ? 'var(--success)' : '#c0392b' }}>
             ${(totalInc - totalExp).toFixed(2)}
           </span>
         </div>
       </div>
 
-      {/* FILTROS */}
-      <div style={{ background: 'white', padding: '15px 20px', borderRadius: '8px', margin: '20px 0', width: '100%', boxSizing: 'border-box', boxShadow: '0 2px 5px rgba(0,0,0,0.05)', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '15px' }}>
-          <strong style={{ whiteSpace: 'nowrap', fontSize: '1rem' }}>📅 Filtrar por Fecha:</strong>
-          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ flex: 1, padding: '10px', border: '1px solid #ddd', borderRadius: '4px', minWidth: '130px' }} />
+      {/* FILTROS (Limpio, usa clases CSS) */}
+      <div className="filters-container">
+          <strong>📅 Filtrar por Fecha:</strong>
+          <input type="date" className="date-input" value={startDate} onChange={e => setStartDate(e.target.value)} />
           <span style={{color: '#999'}}>—</span>
-          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ flex: 1, padding: '10px', border: '1px solid #ddd', borderRadius: '4px', minWidth: '130px' }} />
-          <button onClick={handleFilterDate} style={{ background: '#3498db', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '4px', cursor: 'pointer' }}>Ver</button>
-          {(startDate || endDate) && (<button onClick={clearFilters} style={{ background: '#95a5a6', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '4px', cursor: 'pointer' }}>Limpiar</button>)}
+          <input type="date" className="date-input" value={endDate} onChange={e => setEndDate(e.target.value)} />
+          <button onClick={handleFilterDate} className="filter-btn">Ver</button>
+          {(startDate || endDate) && (<button onClick={clearFilters} className="clear-btn">Limpiar</button>)}
       </div>
 
       <div className="content">
@@ -365,7 +353,7 @@ function ExpenseManager({ token, onLogout }) {
             <button type="submit">Guardar</button>
           </form>
           
-          <form onSubmit={(e) => handleSubmit(e, 'expense')} className="expense-form" style={{ marginTop: '20px' }}>
+          <form onSubmit={(e) => handleSubmit(e, 'expense')} className="expense-form">
             <div className="form-header"><h2>Nuevo Gasto</h2><button type="button" className="gear-btn" onClick={() => setView('settings_expense')}>⚙️</button></div>
             {renderForm(expenseFields, 'expense', expenseForm, handleCreateChange)}
             <button type="submit">Guardar</button>
@@ -382,10 +370,10 @@ function ExpenseManager({ token, onLogout }) {
                    <div className="card-actions"><button onClick={() => openEditModal(inc, 'income')} className="edit-btn">✏️</button><button onClick={() => handleDelete('incomes', inc.id)} className="delete-btn">&times;</button></div>
                  </article>
                ))
-             ) : (<p style={{ color: '#999', textAlign: 'center', padding: '20px' }}>{incomes === null ? 'Cargando...' : 'No hay ingresos registrados'}</p>)}
+             ) : (<p style={{ color: '#999', textAlign: 'center', padding: '20px' }}>No hay ingresos registrados</p>)}
           </div>
           
-          <div className="expense-list" style={{ marginTop: '20px' }}>
+          <div className="expense-list">
             <h3>Gastos Recientes {hiddenCategories.length > 0 || startDate ? '(Filtrados)' : ''}</h3>
             {Array.isArray(expensesFilteredByCat) && expensesFilteredByCat.length > 0 ? (
               expensesFilteredByCat.map(exp => (
@@ -394,26 +382,26 @@ function ExpenseManager({ token, onLogout }) {
                   <div className="card-actions"><button onClick={() => openEditModal(exp, 'expense')} className="edit-btn">✏️</button><button onClick={() => handleDelete('expenses', exp.id)} className="delete-btn">&times;</button></div>
                 </article>
               ))
-            ) : (<p style={{ color: '#999', textAlign: 'center', padding: '20px' }}>{expenses === null ? 'Cargando...' : 'No hay gastos para mostrar'}</p>)}
+            ) : (<p style={{ color: '#999', textAlign: 'center', padding: '20px' }}>No hay gastos para mostrar</p>)}
           </div>
         </div>
       </div>
 
       <div style={{ marginTop: '30px', marginBottom: '40px' }}>
-        <button className="toggle-chart-btn" onClick={() => setShowChart(!showChart)} style={{ width: '100%', padding: '15px', fontSize: '1.1rem', backgroundColor: '#34495e', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <button className="toggle-chart-btn" onClick={() => setShowChart(!showChart)}>
             <span>📊 Visualización y Categorías</span><span>{showChart ? '🔼' : '🔽'}</span>
         </button>
 
         {showChart && (
-            <div className="chart-section" style={{ background: 'white', padding: '20px', borderRadius: '8px', boxShadow: '0 2px 5px rgba(0,0,0,0.05)' }}>
-                <div style={{ marginBottom: '20px', paddingBottom: '15px', borderBottom: '1px solid #eee' }}>
+            <div className="chart-section">
+                <div className="category-filter-area">
                     <div style={{display:'flex', flexDirection:'column', gap: '5px'}}>
                         <strong>🏷️ Categorías Visibles:</strong>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '5px', background: '#f9f9f9', padding: '10px', borderRadius: '5px', border: '1px solid #eee' }}>
+                        <div className="category-chips">
                             {allCats.map(cat => {
                               const isChecked = !hiddenCategories.includes(cat);
                               return (
-                                <label key={cat} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.95rem', userSelect: 'none', opacity: isChecked ? 1 : 0.6 }}>
+                                <label key={cat} className="cat-chip" style={{ opacity: isChecked ? 1 : 0.6 }}>
                                     <input type="checkbox" checked={isChecked} onChange={() => handleToggleCategory(cat)} />
                                     <span style={{ textDecoration: isChecked ? 'none' : 'line-through' }}>{cat}</span>
                                 </label>
@@ -422,7 +410,9 @@ function ExpenseManager({ token, onLogout }) {
                             {allCats.length === 0 && <span style={{color: '#999'}}>No hay categorías aún</span>}
                         </div>
                     </div>
-                    {hiddenCategories.length > 0 && (<button onClick={() => setHiddenCategories([])} style={{ marginTop: '10px', background: 'transparent', color: '#3498db', border: '1px solid #3498db', padding: '5px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.9rem' }}>Mostrar Todas</button>)}
+                    {hiddenCategories.length > 0 && (
+                        <button onClick={() => setHiddenCategories([])} className="show-all-link">Mostrar Todas</button>
+                    )}
                 </div>
                 <ExpensesChart expenses={safeExpenses} incomes={safeIncomes} hiddenCategories={hiddenCategories} onToggleCategory={handleToggleCategory} currentTotalExp={totalExp} />
             </div>
