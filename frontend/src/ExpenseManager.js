@@ -5,112 +5,119 @@ const API_URL = process.env.REACT_APP_API_URL;
 
 function ExpenseManager({ token, onLogout }) {
   const [view, setView] = useState('dashboard');
-  
   const [showChart, setShowChart] = useState(true); 
 
   // === FILTROS ===
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  
   const [hiddenCategories, setHiddenCategories] = useState([]);
 
-  // Datos (Inicializados como Arrays vacíos para evitar errores)
+  // Datos
   const [expenses, setExpenses] = useState([]);
   const [incomes, setIncomes] = useState([]);
-  const [categories, setCategories] = useState([]);
+  const [categories, setCategories] = useState([]); // Array vacío inicial
   const [expenseFields, setExpenseFields] = useState([]);
   const [incomeFields, setIncomeFields] = useState([]);
 
   // Formularios
   const [expenseForm, setExpenseForm] = useState({});
   const [incomeForm, setIncomeForm] = useState({});
-  
   const [editingItem, setEditingItem] = useState(null);
   const [editForm, setEditForm] = useState({});
-
   const [newFieldName, setNewFieldName] = useState('');
   const [newCatName, setNewCatName] = useState('');
 
   const dragItem = useRef();
   const dragOverItem = useRef();
 
-  // === FETCH ===
-  const authedFetch = (url, options = {}) => {
+  // === FETCH INTELIGENTE (Detecta sesión caducada) ===
+  const authedFetch = async (url, options = {}) => {
     const headers = { 
       ...options.headers, 
       'Content-Type': 'application/json', 
       'Authorization': `Bearer ${token}` 
     };
-    return fetch(url, { ...options, headers });
+    
+    try {
+      const response = await fetch(url, { ...options, headers });
+      
+      // SI EL TOKEN NO SIRVE (401 o 403), SACAMOS AL USUARIO
+      if (response.status === 401 || response.status === 403) {
+        console.warn("Sesión expirada o inválida. Cerrando sesión...");
+        localStorage.removeItem('token'); // Limpieza extra
+        onLogout(); // Sacar al usuario al Login
+        return null; // Detener ejecución
+      }
+      
+      return response;
+    } catch (error) {
+      console.error("Error de red:", error);
+      return null;
+    }
   };
 
   // 1. FETCH GASTOS
   const fetchFilteredExpenses = async () => {
-    try {
-      let url = `${API_URL}/expenses`;
-      if (startDate && endDate) {
-        url += `?startDate=${startDate}&endDate=${endDate}`;
-      }
-      const res = await authedFetch(url);
-      const data = await res.json();
-      // Protección: Si data no es array, poner array vacío
-      setExpenses(Array.isArray(data) ? data : []);
-    } catch (error) {
-      console.error("Error fetching expenses:", error);
-      setExpenses([]);
+    let url = `${API_URL}/expenses`;
+    if (startDate && endDate) url += `?startDate=${startDate}&endDate=${endDate}`;
+    
+    const res = await authedFetch(url);
+    if (!res) return; // Si falló la autenticación, paramos
+
+    if (res.ok) {
+        const data = await res.json();
+        setExpenses(Array.isArray(data) ? data : []);
     }
   };
 
-  // 2. FETCH INGRESOS (Filtro Manual Frontend)
+  // 2. FETCH INGRESOS
   const fetchFilteredIncomes = async () => {
-    try {
-      const res = await authedFetch(`${API_URL}/incomes`);
-      let data = await res.json();
-      // Protección
-      data = Array.isArray(data) ? data : [];
+    const res = await authedFetch(`${API_URL}/incomes`);
+    if (!res) return;
 
-      if (startDate && endDate) {
-          const start = new Date(startDate + 'T00:00:00'); 
-          const end = new Date(endDate + 'T23:59:59');
+    if (res.ok) {
+        let data = await res.json();
+        data = Array.isArray(data) ? data : [];
 
-          data = data.filter(item => {
-              const itemDateStr = item.date || item.created_at;
-              if (!itemDateStr) return false;
-              const itemDate = new Date(itemDateStr);
-              return itemDate >= start && itemDate <= end;
-          });
-      }
-      setIncomes(data);
-    } catch (error) {
-      console.error("Error fetching incomes:", error);
-      setIncomes([]);
+        if (startDate && endDate) {
+            const start = new Date(startDate + 'T00:00:00'); 
+            const end = new Date(endDate + 'T23:59:59');
+            data = data.filter(item => {
+                const itemDateStr = item.date || item.created_at;
+                if (!itemDateStr) return false;
+                const itemDate = new Date(itemDateStr);
+                return itemDate >= start && itemDate <= end;
+            });
+        }
+        setIncomes(data);
     }
   };
 
-  const loadData = () => {
+  const loadData = async () => {
     fetchFilteredExpenses(); 
     fetchFilteredIncomes();  
-    authedFetch(`${API_URL}/categories`)
-      .then(r => r.json())
-      .then(data => setCategories(Array.isArray(data) ? data : []))
-      .catch(() => setCategories([]));
+    
+    // Categorías (Manejo robusto)
+    const catRes = await authedFetch(`${API_URL}/categories`);
+    if (catRes && catRes.ok) {
+        const data = await catRes.json();
+        setCategories(Array.isArray(data) ? data : []);
+    }
 
-    authedFetch(`${API_URL}/form-fields/expense`)
-      .then(r => r.json())
-      .then(data => setExpenseFields(Array.isArray(data) ? data : []))
-      .catch(() => setExpenseFields([]));
+    // Campos
+    const expFieldRes = await authedFetch(`${API_URL}/form-fields/expense`);
+    if (expFieldRes && expFieldRes.ok) setExpenseFields(await expFieldRes.json());
 
-    authedFetch(`${API_URL}/form-fields/income`)
-      .then(r => r.json())
-      .then(data => setIncomeFields(Array.isArray(data) ? data : []))
-      .catch(() => setIncomeFields([]));
+    const incFieldRes = await authedFetch(`${API_URL}/form-fields/income`);
+    if (incFieldRes && incFieldRes.ok) setIncomeFields(await incFieldRes.json());
   };
 
   useEffect(() => { 
     if (token) loadData(); 
   }, [token]);
 
-  // Protección en categorías
+  // === AQUÍ ESTABA EL ERROR DEL MAP ===
+  // Aseguramos que categories sea un array antes de hacer map
   const safeCategories = Array.isArray(categories) ? categories : [];
   const allCats = [...new Set(['Varios', ...safeCategories.map(c => c.name)])];
 
@@ -132,7 +139,6 @@ function ExpenseManager({ token, onLogout }) {
     setStartDate('');
     setEndDate('');
     setHiddenCategories([]); 
-    // Recargar datos sin filtros
     loadData(); 
   };
 
@@ -166,10 +172,10 @@ function ExpenseManager({ token, onLogout }) {
   const onDragEnter = (e, index) => { dragOverItem.current = index; };
   const onDragEnd = (e, context) => { e.target.classList.remove('dragging-item'); handleSort(context); };
   const openEditModal = (item, type) => { const flatData = { ...item, ...(item.custom_data || {}) }; setEditingItem({ ...flatData, type }); setEditForm(flatData); };
-  const handleUpdate = async (e) => { e.preventDefault(); if (!editingItem) return; const url = editingItem.type === 'expense' ? `${API_URL}/expenses/${editingItem.id}` : `${API_URL}/incomes/${editingItem.id}`; const res = await authedFetch(url, { method: 'PUT', body: JSON.stringify(editForm) }); if (res.ok) { setEditingItem(null); loadData(); } else { alert('Error al actualizar.'); } };
+  const handleUpdate = async (e) => { e.preventDefault(); if (!editingItem) return; const url = editingItem.type === 'expense' ? `${API_URL}/expenses/${editingItem.id}` : `${API_URL}/incomes/${editingItem.id}`; const res = await authedFetch(url, { method: 'PUT', body: JSON.stringify(editForm) }); if (res && res.ok) { setEditingItem(null); loadData(); } else { alert('Error al actualizar.'); } };
   const handleCreateChange = (e, context) => { const { name, value } = e.target; if (context === 'expense') setExpenseForm({ ...expenseForm, [name]: value }); else setIncomeForm({ ...incomeForm, [name]: value }); };
   const handleEditChange = (e) => { setEditForm({ ...editForm, [e.target.name]: e.target.value }); };
-  const handleSubmit = async (e, context) => { e.preventDefault(); const url = context === 'expense' ? `${API_URL}/expenses` : `${API_URL}/incomes`; const body = context === 'expense' ? expenseForm : incomeForm; const res = await authedFetch(url, { method: 'POST', body: JSON.stringify(body) }); if (res.ok) { context === 'expense' ? setExpenseForm({}) : setIncomeForm({}); loadData(); } else { alert('Error al guardar.'); } };
+  const handleSubmit = async (e, context) => { e.preventDefault(); const url = context === 'expense' ? `${API_URL}/expenses` : `${API_URL}/incomes`; const body = context === 'expense' ? expenseForm : incomeForm; const res = await authedFetch(url, { method: 'POST', body: JSON.stringify(body) }); if (res && res.ok) { context === 'expense' ? setExpenseForm({}) : setIncomeForm({}); loadData(); } else { alert('Error al guardar.'); } };
   const handleDelete = async (type, id) => { if (window.confirm('¿Borrar elemento?')) { await authedFetch(`${API_URL}/${type}/${id}`, { method: 'DELETE' }); loadData(); } };
   const handleAddField = async (context) => { if (!newFieldName) return; await authedFetch(`${API_URL}/form-fields`, { method: 'POST', body: JSON.stringify({ context, label: newFieldName, type: 'text' }) }); setNewFieldName(''); loadData(); };
   const handleDeleteField = async (id) => { if (window.confirm('¿Eliminar campo?')) { await authedFetch(`${API_URL}/form-fields/${id}`, { method: 'DELETE' }); loadData(); } };
@@ -206,7 +212,6 @@ function ExpenseManager({ token, onLogout }) {
   const renderItemContent = (item, type) => {
     const allData = { ...item, ...item.custom_data };
     const fieldsConfig = type === 'expense' ? expenseFields : incomeFields;
-    // Protección por si fieldsConfig no está cargado
     if (!Array.isArray(fieldsConfig)) return null;
 
     const dateValue = allData.date || allData.created_at || item.date || item.created_at;
@@ -236,8 +241,6 @@ function ExpenseManager({ token, onLogout }) {
     const isExpense = view === 'settings_expense';
     const context = isExpense ? 'expense' : 'income';
     const fields = isExpense ? expenseFields : incomeFields;
-    
-    // Protección de seguridad para settings
     const safeFields = Array.isArray(fields) ? fields : [];
 
     return (
@@ -276,33 +279,16 @@ function ExpenseManager({ token, onLogout }) {
   return (
     <>
       <header>
-        {/* === NUEVO DISEÑO FINZA === */}
         <h1 style={{ 
-            fontFamily: "'Segoe UI', sans-serif",
-            fontSize: '1.8rem',
-            fontWeight: '800',
-            color: '#2c3e50',
-            letterSpacing: '4px',
-            textTransform: 'uppercase',
-            margin: 0,
-            textShadow: '1px 1px 2px rgba(0,0,0,0.1)'
+            fontFamily: "'Segoe UI', sans-serif", fontSize: '1.8rem', fontWeight: '800', color: '#2c3e50', letterSpacing: '4px', textTransform: 'uppercase', margin: 0, textShadow: '1px 1px 2px rgba(0,0,0,0.1)'
         }}>
           Finza 💸
         </h1>
         <button onClick={onLogout} className="logout-btn">Cerrar Sesión</button>
       </header>
 
-      {/* === 1. BALANCE (STICKY) === */}
-      <div className="balance-bar" style={{ 
-          position: 'sticky', 
-          top: 0, 
-          zIndex: 1000, 
-          background: 'rgba(215, 236, 242, 0.98)', 
-          backdropFilter: 'blur(5px)',
-          padding: '10px 0', 
-          margin: '0 0 20px 0',
-          boxShadow: '0 4px 10px rgba(0,0,0,0.08)' 
-      }}>
+      {/* BALANCE */}
+      <div className="balance-bar" style={{ position: 'sticky', top: 0, zIndex: 1000, background: 'rgba(215, 236, 242, 0.98)', backdropFilter: 'blur(5px)', padding: '10px 0', margin: '0 0 20px 0', boxShadow: '0 4px 10px rgba(0,0,0,0.08)' }}>
         <div className="balance-card income"><span>Ingresos</span><span>+${totalInc.toFixed(2)}</span></div>
         <div className="balance-card expense"><span>Gastos</span><span>-${totalExp.toFixed(2)}</span></div>
         <div className="balance-card balance">
@@ -313,137 +299,61 @@ function ExpenseManager({ token, onLogout }) {
         </div>
       </div>
 
-      {/* 2. FILTRO DE FECHAS */}
-      <div style={{ 
-          background: 'white', 
-          padding: '15px 20px', 
-          borderRadius: '8px', 
-          margin: '20px 0', 
-          width: '100%',            
-          boxSizing: 'border-box',
-          boxShadow: '0 2px 5px rgba(0,0,0,0.05)',
-          display: 'flex',          
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          gap: '15px'
-      }}>
+      {/* FILTROS */}
+      <div style={{ background: 'white', padding: '15px 20px', borderRadius: '8px', margin: '20px 0', width: '100%', boxSizing: 'border-box', boxShadow: '0 2px 5px rgba(0,0,0,0.05)', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '15px' }}>
           <strong style={{ whiteSpace: 'nowrap', fontSize: '1rem' }}>📅 Filtrar por Fecha:</strong>
-          
-          <input 
-            type="date" 
-            value={startDate} 
-            onChange={e => setStartDate(e.target.value)} 
-            style={{ flex: 1, padding: '10px', border: '1px solid #ddd', borderRadius: '4px', minWidth: '130px' }} 
-          />
-          
+          <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} style={{ flex: 1, padding: '10px', border: '1px solid #ddd', borderRadius: '4px', minWidth: '130px' }} />
           <span style={{color: '#999'}}>—</span>
-
-          <input 
-            type="date" 
-            value={endDate} 
-            onChange={e => setEndDate(e.target.value)} 
-            style={{ flex: 1, padding: '10px', border: '1px solid #ddd', borderRadius: '4px', minWidth: '130px' }} 
-          />
-            
-          <button onClick={handleFilterDate} style={{ background: '#3498db', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '4px', cursor: 'pointer' }}>
-            Ver
-          </button>
-            
-          {(startDate || endDate) && (
-              <button onClick={clearFilters} style={{ background: '#95a5a6', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '4px', cursor: 'pointer' }}>
-                  Limpiar
-              </button>
-          )}
+          <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} style={{ flex: 1, padding: '10px', border: '1px solid #ddd', borderRadius: '4px', minWidth: '130px' }} />
+          <button onClick={handleFilterDate} style={{ background: '#3498db', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '4px', cursor: 'pointer' }}>Ver</button>
+          {(startDate || endDate) && (<button onClick={clearFilters} style={{ background: '#95a5a6', color: 'white', border: 'none', padding: '10px 20px', borderRadius: '4px', cursor: 'pointer' }}>Limpiar</button>)}
       </div>
 
       <div className="content">
         <div className="forms-column">
           <form onSubmit={(e) => handleSubmit(e, 'income')} className="income-form">
-            <div className="form-header">
-              <h2>Añadir Ingreso</h2>
-              <button type="button" className="gear-btn" onClick={() => setView('settings_income')}>⚙️</button>
-            </div>
+            <div className="form-header"><h2>Añadir Ingreso</h2><button type="button" className="gear-btn" onClick={() => setView('settings_income')}>⚙️</button></div>
             {renderForm(incomeFields, 'income', incomeForm, handleCreateChange)}
             <button type="submit">Guardar</button>
           </form>
           
           <form onSubmit={(e) => handleSubmit(e, 'expense')} className="expense-form" style={{ marginTop: '20px' }}>
-            <div className="form-header">
-              <h2>Nuevo Gasto</h2>
-              <button type="button" className="gear-btn" onClick={() => setView('settings_expense')}>⚙️</button>
-            </div>
+            <div className="form-header"><h2>Nuevo Gasto</h2><button type="button" className="gear-btn" onClick={() => setView('settings_expense')}>⚙️</button></div>
             {renderForm(expenseFields, 'expense', expenseForm, handleCreateChange)}
             <button type="submit">Guardar</button>
           </form>
         </div>
 
         <div className="lists-column">
-          {/* === LISTA DE INGRESOS BLINDADA === */}
           <div className="income-list">
              <h3>Ingresos Recientes {startDate ? '(Filtrados)' : ''}</h3>
-             
              {Array.isArray(safeIncomes) && safeIncomes.length > 0 ? (
                safeIncomes.map(inc => (
                  <article key={inc.id} className="income-card">
                    {renderItemContent(inc, 'income')}
-                   <div className="card-actions">
-                     <button onClick={() => openEditModal(inc, 'income')} className="edit-btn">✏️</button>
-                     <button onClick={() => handleDelete('incomes', inc.id)} className="delete-btn">&times;</button>
-                   </div>
+                   <div className="card-actions"><button onClick={() => openEditModal(inc, 'income')} className="edit-btn">✏️</button><button onClick={() => handleDelete('incomes', inc.id)} className="delete-btn">&times;</button></div>
                  </article>
                ))
-             ) : (
-                <p style={{ color: '#999', textAlign: 'center', padding: '20px' }}>
-                  {incomes === null ? 'Cargando...' : 'No hay ingresos registrados'}
-                </p>
-             )}
+             ) : (<p style={{ color: '#999', textAlign: 'center', padding: '20px' }}>{incomes === null ? 'Cargando...' : 'No hay ingresos registrados'}</p>)}
           </div>
           
-          {/* === LISTA DE GASTOS BLINDADA === */}
           <div className="expense-list" style={{ marginTop: '20px' }}>
             <h3>Gastos Recientes {hiddenCategories.length > 0 || startDate ? '(Filtrados)' : ''}</h3>
-            
             {Array.isArray(expensesFilteredByCat) && expensesFilteredByCat.length > 0 ? (
               expensesFilteredByCat.map(exp => (
                 <article key={exp.id} className="expense-card">
                   {renderItemContent(exp, 'expense')}
-                  <div className="card-actions">
-                    <button onClick={() => openEditModal(exp, 'expense')} className="edit-btn">✏️</button>
-                    <button onClick={() => handleDelete('expenses', exp.id)} className="delete-btn">&times;</button>
-                  </div>
+                  <div className="card-actions"><button onClick={() => openEditModal(exp, 'expense')} className="edit-btn">✏️</button><button onClick={() => handleDelete('expenses', exp.id)} className="delete-btn">&times;</button></div>
                 </article>
               ))
-            ) : (
-              <p style={{ color: '#999', textAlign: 'center', padding: '20px' }}>
-                {expenses === null ? 'Cargando...' : 'No hay gastos para mostrar'}
-              </p>
-            )}
+            ) : (<p style={{ color: '#999', textAlign: 'center', padding: '20px' }}>{expenses === null ? 'Cargando...' : 'No hay gastos para mostrar'}</p>)}
           </div>
         </div>
       </div>
 
-      {/* 3. VISUALIZACIÓN Y FILTROS ABAJO */}
       <div style={{ marginTop: '30px', marginBottom: '40px' }}>
-        <button 
-            className="toggle-chart-btn" 
-            onClick={() => setShowChart(!showChart)}
-            style={{ 
-            width: '100%', 
-            padding: '15px', 
-            fontSize: '1.1rem', 
-            backgroundColor: '#34495e', 
-            color: 'white', 
-            border: 'none', 
-            borderRadius: '8px', 
-            cursor: 'pointer',
-            marginBottom: '15px',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center'
-            }}
-        >
-            <span>📊 Visualización y Categorías</span>
-            <span>{showChart ? '🔼' : '🔽'}</span>
+        <button className="toggle-chart-btn" onClick={() => setShowChart(!showChart)} style={{ width: '100%', padding: '15px', fontSize: '1.1rem', backgroundColor: '#34495e', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>📊 Visualización y Categorías</span><span>{showChart ? '🔼' : '🔽'}</span>
         </button>
 
         {showChart && (
@@ -451,25 +361,12 @@ function ExpenseManager({ token, onLogout }) {
                 <div style={{ marginBottom: '20px', paddingBottom: '15px', borderBottom: '1px solid #eee' }}>
                     <div style={{display:'flex', flexDirection:'column', gap: '5px'}}>
                         <strong>🏷️ Categorías Visibles:</strong>
-                        <div style={{ 
-                            display: 'flex', 
-                            flexWrap: 'wrap', 
-                            gap: '10px', 
-                            marginTop: '5px',
-                            background: '#f9f9f9',
-                            padding: '10px',
-                            borderRadius: '5px',
-                            border: '1px solid #eee'
-                        }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '5px', background: '#f9f9f9', padding: '10px', borderRadius: '5px', border: '1px solid #eee' }}>
                             {allCats.map(cat => {
                               const isChecked = !hiddenCategories.includes(cat);
                               return (
                                 <label key={cat} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.95rem', userSelect: 'none', opacity: isChecked ? 1 : 0.6 }}>
-                                    <input 
-                                        type="checkbox" 
-                                        checked={isChecked}
-                                        onChange={() => handleToggleCategory(cat)}
-                                    />
+                                    <input type="checkbox" checked={isChecked} onChange={() => handleToggleCategory(cat)} />
                                     <span style={{ textDecoration: isChecked ? 'none' : 'line-through' }}>{cat}</span>
                                 </label>
                               );
@@ -477,20 +374,9 @@ function ExpenseManager({ token, onLogout }) {
                             {allCats.length === 0 && <span style={{color: '#999'}}>No hay categorías aún</span>}
                         </div>
                     </div>
-                    {hiddenCategories.length > 0 && (
-                          <button onClick={() => setHiddenCategories([])} style={{ marginTop: '10px', background: 'transparent', color: '#3498db', border: '1px solid #3498db', padding: '5px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.9rem' }}>
-                            Mostrar Todas
-                          </button>
-                    )}
+                    {hiddenCategories.length > 0 && (<button onClick={() => setHiddenCategories([])} style={{ marginTop: '10px', background: 'transparent', color: '#3498db', border: '1px solid #3498db', padding: '5px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.9rem' }}>Mostrar Todas</button>)}
                 </div>
-
-                <ExpensesChart 
-                    expenses={safeExpenses} 
-                    incomes={safeIncomes} 
-                    hiddenCategories={hiddenCategories} 
-                    onToggleCategory={handleToggleCategory}
-                    currentTotalExp={totalExp} 
-                />
+                <ExpensesChart expenses={safeExpenses} incomes={safeIncomes} hiddenCategories={hiddenCategories} onToggleCategory={handleToggleCategory} currentTotalExp={totalExp} />
             </div>
         )}
       </div>
@@ -501,10 +387,7 @@ function ExpenseManager({ token, onLogout }) {
             <h2>Editar {editingItem.type === 'expense' ? 'Gasto' : 'Ingreso'}</h2>
             <form onSubmit={handleUpdate}>
               {renderForm(editingItem.type === 'expense' ? expenseFields : incomeFields, editingItem.type, editForm, handleEditChange)}
-              <div className="modal-buttons">
-                <button type="button" onClick={() => setEditingItem(null)} className="cancel-btn">Cancelar</button>
-                <button type="submit" className="save-btn">Guardar</button>
-              </div>
+              <div className="modal-buttons"><button type="button" onClick={() => setEditingItem(null)} className="cancel-btn">Cancelar</button><button type="submit" className="save-btn">Guardar</button></div>
             </form>
           </div>
         </div>
