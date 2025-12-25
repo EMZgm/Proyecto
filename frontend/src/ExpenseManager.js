@@ -54,29 +54,40 @@ function ExpenseManager({ token, onLogout }) {
     }
   };
 
-  // === FECHA LOCAL (FIX ZONA HORARIA) ===
-  const getLocalDateYMD = (dateString) => {
-    if (!dateString) return '';
-    const date = new Date(dateString);
-    // USAMOS UTC AQUÍ TAMBIÉN para que no reste 5 horas al editar
-    const year = date.getUTCFullYear();
-    const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-    const day = String(date.getUTCDate()).padStart(2, '0');
+  // =========================================================
+  // === LÓGICA DE TEXTO PURO (SIN new Date) ===
+  // =========================================================
+
+  // 1. Extraer "YYYY-MM-DD" cortando el string. 
+  // NO convierte horas, NO usa zona horaria.
+  const getDateString = (anyString) => {
+    if (!anyString) return '';
+    // Toma solo los primeros 10 caracteres: "2025-12-24"
+    return String(anyString).substring(0, 10);
+  };
+
+  // 2. Formato Visual Manual (DD/MM/YYYY)
+  const formatDateVisual = (dateString) => {
+    const cleanDate = getDateString(dateString); // "2025-12-24"
+    if (!cleanDate || cleanDate.length !== 10) return cleanDate;
+
+    const [year, month, day] = cleanDate.split('-');
+    // Mapeo manual de meses para evitar errores de índice
+    const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+    return `${day} ${months[parseInt(month) - 1]} ${year}`;
+  };
+
+  // 3. Fecha de HOY como texto simple
+  const getTodayString = () => {
+    const d = new Date();
+    // Aquí sí usamos new Date() solo para obtener los números de hoy en tu PC
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
   };
 
-  const formatDate = (dateString) => {
-    if (!dateString) return '';
-    const date = new Date(dateString);
-    // El truco mágico: timeZone: 'UTC'. 
-    // Esto obliga a mostrar la fecha literal sin restar tu zona horaria.
-    return date.toLocaleDateString('es-ES', { 
-        day: 'numeric', 
-        month: 'short', 
-        year: 'numeric',
-        timeZone: 'UTC' 
-    });
-  };
+  // =========================================================
 
   // === CARGA DE DATOS ===
   const fetchFilteredExpenses = async () => {
@@ -87,11 +98,13 @@ function ExpenseManager({ token, onLogout }) {
         let data = await res.json();
         data = Array.isArray(data) ? data : [];
 
-        // Filtrado cliente para evitar problemas de zona horaria server-side
+        // FILTRO: TEXTO vs TEXTO
         if (startDate && endDate) {
             data = data.filter(item => {
-                const itemDateStr = getLocalDateYMD(item.date || item.created_at);
-                return itemDateStr >= startDate && itemDateStr <= endDate;
+                // "2025-12-24"
+                const itemDate = getDateString(item.date || item.created_at);
+                // Comparación alfabética funciona perfecto con formato ISO
+                return itemDate >= startDate && itemDate <= endDate;
             });
         }
         setExpenses(data);
@@ -108,8 +121,8 @@ function ExpenseManager({ token, onLogout }) {
 
         if (startDate && endDate) {
             data = data.filter(item => {
-                const itemDateStr = getLocalDateYMD(item.date || item.created_at);
-                return itemDateStr >= startDate && itemDateStr <= endDate;
+                const itemDate = getDateString(item.date || item.created_at);
+                return itemDate >= startDate && itemDate <= endDate;
             });
         }
         setIncomes(data);
@@ -159,7 +172,6 @@ function ExpenseManager({ token, onLogout }) {
     setStartDate('');
     setEndDate('');
     setHiddenCategories([]); 
-    // Recarga limpia sin filtros
     authedFetch(`${API_URL}/expenses`).then(r => r.json()).then(d => setExpenses(Array.isArray(d) ? d : []));
     authedFetch(`${API_URL}/incomes`).then(r => r.json()).then(d => setIncomes(Array.isArray(d) ? d : []));
   };
@@ -185,13 +197,21 @@ function ExpenseManager({ token, onLogout }) {
   const onDragEnd = (e, context) => { e.target.classList.remove('dragging-item'); handleSort(context); };
   
   // === CRUD ===
-  const openEditModal = (item, type) => { const flatData = { ...item, ...(item.custom_data || {}) }; setEditingItem({ ...flatData, type }); setEditForm(flatData); };
+  const openEditModal = (item, type) => { 
+    const flatData = { ...item, ...(item.custom_data || {}) }; 
+    // Al editar, simplemente cargamos el string cortado en el input
+    if (flatData.date) flatData.date = getDateString(flatData.date);
+    
+    setEditingItem({ ...flatData, type }); 
+    setEditForm(flatData); 
+  };
   
   const handleUpdate = async (e) => { 
       e.preventDefault(); 
       if (!editingItem) return; 
       const body = { ...editForm };
-      if (!body.date) body.date = getLocalDateYMD(new Date());
+      
+      if (!body.date) body.date = getTodayString();
       
       const url = editingItem.type === 'expense' ? `${API_URL}/expenses/${editingItem.id}` : `${API_URL}/incomes/${editingItem.id}`; 
       const res = await authedFetch(url, { method: 'PUT', body: JSON.stringify(body) }); 
@@ -206,7 +226,9 @@ function ExpenseManager({ token, onLogout }) {
       e.preventDefault(); 
       const url = context === 'expense' ? `${API_URL}/expenses` : `${API_URL}/incomes`; 
       const body = context === 'expense' ? { ...expenseForm } : { ...incomeForm };
-      if (!body.date) body.date = getLocalDateYMD(new Date());
+      
+      // Si no puso fecha, poner hoy (texto simple)
+      if (!body.date) body.date = getTodayString();
 
       const res = await authedFetch(url, { method: 'POST', body: JSON.stringify(body) }); 
       if (res && res.ok) { 
@@ -259,7 +281,7 @@ function ExpenseManager({ token, onLogout }) {
       <div className="item-details">
         {dateValue && (
             <div className="item-date">
-                📅 <span>{formatDate(dateValue)}</span>
+                📅 <span>{formatDateVisual(dateValue)}</span>
             </div>
         )}
         {fieldsConfig.map(field => {
@@ -319,7 +341,7 @@ function ExpenseManager({ token, onLogout }) {
   return (
     <>
       <header>
-        <h1>Finza 💸</h1>
+        <h1>Mi bolsillo</h1>
         <button onClick={onLogout} className="logout-btn">Cerrar Sesión</button>
       </header>
 
