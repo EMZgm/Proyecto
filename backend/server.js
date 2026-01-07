@@ -9,12 +9,24 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 // =====================================================
-// 1. CONFIGURACIÓN CORS
+// 1. CONFIGURACIÓN CORS (MODIFICADA)
 // =====================================================
-const allowedOrigin = process.env.FRONTEND_URL || '*';
+const whitelist = [
+  process.env.FRONTEND_URL,      // Tu URL de Vercel (Producción)
+  'http://localhost:3000',       // Desarrollo Local
+  'http://192.168.100.74:3000'   // Tu IP Local específica
+];
 
 const corsOptions = {
-  origin: allowedOrigin,
+  origin: function (origin, callback) {
+    // !origin permite peticiones sin origen (como Postman o Apps móviles)
+    if (!origin || whitelist.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log("Bloqueado por CORS:", origin); // Para depurar si falla otro
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   optionsSuccessStatus: 200
 };
 
