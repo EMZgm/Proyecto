@@ -88,3 +88,5 @@ CREATE INDEX idx_expenses_user ON expenses(user_id);
 CREATE INDEX idx_incomes_user ON incomes(user_id);
 CREATE INDEX idx_form_fields_user ON form_fields(user_id);
 CREATE INDEX idx_form_fields_ordering ON form_fields(user_id, context, ordering);
+
+ALTER TABLE users ADD COLUMN monthly_limit NUMERIC(10, 2) DEFAULT 0;

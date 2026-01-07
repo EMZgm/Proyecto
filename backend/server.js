@@ -11,8 +11,6 @@ const port = process.env.PORT || 3001;
 // =====================================================
 // 1. CONFIGURACIÓN CORS
 // =====================================================
-// Aquí definimos quién tiene permiso para conectarse.
-// Si process.env.FRONTEND_URL existe, lo usa. Si no, usa '*' (todos).
 const allowedOrigin = process.env.FRONTEND_URL || '*';
 
 const corsOptions = {
@@ -34,7 +32,6 @@ const connectionString = process.env.DATABASE_URL
 
 const pool = new Pool({
   connectionString: connectionString,
-  // Para Render es OBLIGATORIO usar SSL, localmente no.
   ssl: isProduction ? { rejectUnauthorized: false } : false 
 });
 
@@ -55,7 +52,7 @@ const authenticateToken = (req, res, next) => {
 };
 
 // =====================================================
-// 4. RUTAS DE AUTENTICACIÓN (LOGIN / REGISTER)
+// 4. RUTAS DE AUTENTICACIÓN Y USUARIO
 // =====================================================
 app.post('/register', async (req, res) => {
   try {
@@ -65,6 +62,7 @@ app.post('/register', async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hash = await bcrypt.hash(password, salt);
     
+    // Insertamos usuario (el monthly_limit tendrá el valor default 0 o lo que hayas puesto en SQL)
     const newUser = await pool.query(
       'INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email', 
       [email, hash]
@@ -91,8 +89,32 @@ app.post('/login', async (req, res) => {
         process.env.JWT_SECRET, 
         { expiresIn: '2h' }
     );
-    res.json({ token, user: { id: user.id, email: user.email } });
+    
+    // [CAMBIO IMPORTANTE] Ahora devolvemos también el monthly_limit
+    res.json({ 
+        token, 
+        user: { 
+            id: user.id, 
+            email: user.email,
+            monthly_limit: user.monthly_limit || 0 // Enviamos el límite (o 0 si es null)
+        } 
+    });
   } catch (err) { res.status(500).json({ error: 'Error en login' }); }
+});
+
+// [NUEVA RUTA] Actualizar el límite de presupuesto
+app.put('/update-limit', authenticateToken, async (req, res) => {
+  const { limit } = req.body;
+  const userId = req.user.userId;
+
+  try {
+    // Actualizamos el campo monthly_limit en la base de datos
+    await pool.query('UPDATE users SET monthly_limit = $1 WHERE id = $2', [limit, userId]);
+    res.json({ message: 'Límite actualizado', limit });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al actualizar límite' });
+  }
 });
 
 // =====================================================

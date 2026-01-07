@@ -12,6 +12,15 @@ function ExpenseManager({ token, onLogout }) {
   const [endDate, setEndDate] = useState('');
   const [hiddenCategories, setHiddenCategories] = useState([]);
 
+  // === NUEVO: ESTADOS PARA PRESUPUESTO ===
+  // Intentamos leer del localStorage inicial para que no se resetee a 0 al recargar
+  const [budgetLimit, setBudgetLimit] = useState(() => {
+    const saved = localStorage.getItem('user_budget_limit');
+    return saved ? parseFloat(saved) : 0;
+  });
+  const [isEditingLimit, setIsEditingLimit] = useState(false);
+  const [newLimitValue, setNewLimitValue] = useState('');
+
   // Datos
   const [expenses, setExpenses] = useState([]);
   const [incomes, setIncomes] = useState([]);
@@ -55,32 +64,23 @@ function ExpenseManager({ token, onLogout }) {
   };
 
   // =========================================================
-  // === LÓGICA DE TEXTO PURO (SIN new Date) ===
+  // === LÓGICA DE TEXTO PURO (Fechas) ===
   // =========================================================
-
-  // 1. Extraer "YYYY-MM-DD" cortando el string. 
-  // NO convierte horas, NO usa zona horaria.
   const getDateString = (anyString) => {
     if (!anyString) return '';
-    // Toma solo los primeros 10 caracteres: "2025-12-24"
     return String(anyString).substring(0, 10);
   };
 
-  // 2. Formato Visual Manual (DD/MM/YYYY)
   const formatDateVisual = (dateString) => {
-    const cleanDate = getDateString(dateString); // "2025-12-24"
+    const cleanDate = getDateString(dateString); 
     if (!cleanDate || cleanDate.length !== 10) return cleanDate;
-
     const [year, month, day] = cleanDate.split('-');
-    // Mapeo manual de meses para evitar errores de índice
     const months = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
     return `${day} ${months[parseInt(month) - 1]} ${year}`;
   };
 
-  // 3. Fecha de HOY como texto simple
   const getTodayString = () => {
     const d = new Date();
-    // Aquí sí usamos new Date() solo para obtener los números de hoy en tu PC
     const year = d.getFullYear();
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
@@ -88,22 +88,85 @@ function ExpenseManager({ token, onLogout }) {
   };
 
   // =========================================================
+  // === NUEVO: FUNCIÓN EXPORTAR A CSV ===
+  // =========================================================
+  const downloadReport = () => {
+    const allData = [
+      ...expenses.map(e => ({
+        Fecha: e.date || e.created_at,
+        Tipo: 'Gasto',
+        Categoria: e.category || 'Varios',
+        Descripcion: e.description || '',
+        Monto: parseFloat(e.amount) * -1
+      })),
+      ...incomes.map(i => ({
+        Fecha: i.date || i.created_at,
+        Tipo: 'Ingreso',
+        Categoria: 'Ingreso General',
+        Descripcion: i.description || '',
+        Monto: parseFloat(i.amount)
+      }))
+    ];
+
+    if (allData.length === 0) {
+      alert("No hay datos para exportar.");
+      return;
+    }
+
+    // Ordenar por fecha descendente
+    allData.sort((a, b) => new Date(getDateString(b.Fecha)) - new Date(getDateString(a.Fecha)));
+
+    const headers = ['Fecha', 'Tipo', 'Categoria', 'Descripcion', 'Monto'];
+    const csvRows = [
+      headers.join(','),
+      ...allData.map(row => {
+        const safeDesc = `"${row.Descripcion.replace(/"/g, '""')}"`;
+        const cleanDate = getDateString(row.Fecha);
+        return `${cleanDate},${row.Tipo},${row.Categoria},${safeDesc},${row.Monto}`;
+      })
+    ].join('\n');
+
+    const blob = new Blob(['\uFEFF' + csvRows], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `reporte_financiero_${getTodayString()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // =========================================================
+  // === NUEVO: GUARDAR PRESUPUESTO ===
+  // =========================================================
+  const saveBudgetLimit = async () => {
+    const val = parseFloat(newLimitValue);
+    if (isNaN(val) || val < 0) return alert('Ingresa un número válido');
+
+    const res = await authedFetch(`${API_URL}/update-limit`, {
+        method: 'PUT',
+        body: JSON.stringify({ limit: val })
+    });
+
+    if (res && res.ok) {
+        setBudgetLimit(val);
+        localStorage.setItem('user_budget_limit', val); // Guardar en caché local
+        setIsEditingLimit(false);
+    } else {
+        alert('Error al actualizar el límite');
+    }
+  };
 
   // === CARGA DE DATOS ===
   const fetchFilteredExpenses = async () => {
     const res = await authedFetch(`${API_URL}/expenses`);
     if (!res) return;
-
     if (res.ok) {
         let data = await res.json();
         data = Array.isArray(data) ? data : [];
-
-        // FILTRO: TEXTO vs TEXTO
         if (startDate && endDate) {
             data = data.filter(item => {
-                // "2025-12-24"
                 const itemDate = getDateString(item.date || item.created_at);
-                // Comparación alfabética funciona perfecto con formato ISO
                 return itemDate >= startDate && itemDate <= endDate;
             });
         }
@@ -114,11 +177,9 @@ function ExpenseManager({ token, onLogout }) {
   const fetchFilteredIncomes = async () => {
     const res = await authedFetch(`${API_URL}/incomes`);
     if (!res) return;
-
     if (res.ok) {
         let data = await res.json();
         data = Array.isArray(data) ? data : [];
-
         if (startDate && endDate) {
             data = data.filter(item => {
                 const itemDate = getDateString(item.date || item.created_at);
@@ -189,6 +250,12 @@ function ExpenseManager({ token, onLogout }) {
     return sum + (parseFloat(e.amount) || 0);
   }, 0);
 
+  // === NUEVO: CÁLCULOS PARA BARRA DE PRESUPUESTO ===
+  const budgetPercentage = budgetLimit > 0 ? (totalExp / budgetLimit) * 100 : 0;
+  let progressColor = '#4caf50'; // Verde
+  if (budgetPercentage >= 80) progressColor = '#ff9800'; // Naranja
+  if (budgetPercentage >= 100) progressColor = '#f44336'; // Rojo
+
   // === DRAG & DROP / CONFIG ===
   const saveOrder = async (items) => { const orderedIds = items.map(i => i.id); await authedFetch(`${API_URL}/form-fields/reorder`, { method: 'PUT', body: JSON.stringify({ orderedIds }) }); };
   const handleSort = (context) => { const isExpense = context === 'expense'; let _items = [...(isExpense ? expenseFields : incomeFields)]; const draggedItemContent = _items.splice(dragItem.current, 1)[0]; _items.splice(dragOverItem.current, 0, draggedItemContent); dragItem.current = null; dragOverItem.current = null; if (isExpense) setExpenseFields(_items); else setIncomeFields(_items); saveOrder(_items); };
@@ -199,9 +266,7 @@ function ExpenseManager({ token, onLogout }) {
   // === CRUD ===
   const openEditModal = (item, type) => { 
     const flatData = { ...item, ...(item.custom_data || {}) }; 
-    // Al editar, simplemente cargamos el string cortado en el input
     if (flatData.date) flatData.date = getDateString(flatData.date);
-    
     setEditingItem({ ...flatData, type }); 
     setEditForm(flatData); 
   };
@@ -210,9 +275,7 @@ function ExpenseManager({ token, onLogout }) {
       e.preventDefault(); 
       if (!editingItem) return; 
       const body = { ...editForm };
-      
       if (!body.date) body.date = getTodayString();
-      
       const url = editingItem.type === 'expense' ? `${API_URL}/expenses/${editingItem.id}` : `${API_URL}/incomes/${editingItem.id}`; 
       const res = await authedFetch(url, { method: 'PUT', body: JSON.stringify(body) }); 
       if (res && res.ok) { setEditingItem(null); loadData(); } 
@@ -226,10 +289,7 @@ function ExpenseManager({ token, onLogout }) {
       e.preventDefault(); 
       const url = context === 'expense' ? `${API_URL}/expenses` : `${API_URL}/incomes`; 
       const body = context === 'expense' ? { ...expenseForm } : { ...incomeForm };
-      
-      // Si no puso fecha, poner hoy (texto simple)
       if (!body.date) body.date = getTodayString();
-
       const res = await authedFetch(url, { method: 'POST', body: JSON.stringify(body) }); 
       if (res && res.ok) { 
           context === 'expense' ? setExpenseForm({}) : setIncomeForm({}); 
@@ -342,8 +402,71 @@ function ExpenseManager({ token, onLogout }) {
     <>
       <header>
         <h1>Mi bolsillo</h1>
-        <button onClick={onLogout} className="logout-btn">Cerrar Sesión</button>
+        <div style={{display:'flex', gap:'10px'}}>
+            {/* NUEVO BOTÓN EXCEL */}
+            <button onClick={downloadReport} className="excel-btn" style={{background:'#217346', color:'white', border:'none', padding:'5px 10px', borderRadius:'4px', cursor:'pointer', fontWeight:'bold'}}>
+                📥 Excel
+            </button>
+            <button onClick={onLogout} className="logout-btn">Cerrar Sesión</button>
+        </div>
       </header>
+
+      {/* === NUEVO: SECCIÓN DE PRESUPUESTO === */}
+      <div style={{ margin: '20px auto', maxWidth: '1000px', background: 'white', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+          <h3 style={{margin:0}}>💰 Presupuesto Mensual</h3>
+          {isEditingLimit ? (
+            <div style={{ display: 'flex', gap: '5px' }}>
+              <input 
+                type="number" 
+                value={newLimitValue} 
+                onChange={(e) => setNewLimitValue(e.target.value)}
+                placeholder="Ej: 500"
+                style={{ padding: '5px', borderRadius: '4px', border: '1px solid #ccc', width: '100px' }}
+              />
+              <button onClick={saveBudgetLimit} style={{ background: '#4caf50', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', padding:'5px 10px' }}>💾</button>
+              <button onClick={() => setIsEditingLimit(false)} style={{ background: '#f44336', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', padding:'5px 10px' }}>❌</button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>
+                {budgetLimit > 0 ? `$${budgetLimit.toFixed(2)}` : 'Sin límite definido'}
+              </span>
+              <button onClick={() => { setIsEditingLimit(true); setNewLimitValue(budgetLimit); }} style={{ cursor: 'pointer', background: 'none', border: '1px solid #ccc', borderRadius: '4px', padding: '2px 8px', fontSize:'0.8rem' }}>✏️ Editar</button>
+            </div>
+          )}
+        </div>
+
+        {/* BARRA DE PROGRESO */}
+        {budgetLimit > 0 && (
+            <>
+                <div style={{ width: '100%', height: '20px', background: '#e0e0e0', borderRadius: '10px', overflow: 'hidden', position: 'relative' }}>
+                <div style={{ 
+                    width: `${Math.min(budgetPercentage, 100)}%`, 
+                    height: '100%', 
+                    background: progressColor, 
+                    transition: 'width 0.5s ease-in-out',
+                }}></div>
+                </div>
+                <div style={{ marginTop: '5px', fontSize: '0.9rem', color: '#666', display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Gastado: <b>${totalExp.toFixed(2)}</b></span>
+                    <span>{budgetPercentage.toFixed(1)}% del límite</span>
+                </div>
+                
+                {/* ALERTAS */}
+                {budgetPercentage >= 100 && (
+                    <div style={{ marginTop: '10px', padding: '8px', background: '#ffebee', color: '#c62828', borderRadius: '5px', fontSize:'0.9rem' }}>
+                        ⚠️ <b>¡CUIDADO!</b> Has excedido tu presupuesto mensual.
+                    </div>
+                )}
+                {budgetPercentage >= 80 && budgetPercentage < 100 && (
+                    <div style={{ marginTop: '10px', padding: '8px', background: '#fff3e0', color: '#ef6c00', borderRadius: '5px', fontSize:'0.9rem' }}>
+                        ⚠️ <b>Atención:</b> Estás cerca de alcanzar tu límite.
+                    </div>
+                )}
+            </>
+        )}
+      </div>
 
       {/* BALANCE */}
       <div className="balance-bar">
@@ -357,7 +480,7 @@ function ExpenseManager({ token, onLogout }) {
         </div>
       </div>
 
-      {/* FILTROS (Limpio, usa clases CSS) */}
+      {/* FILTROS */}
       <div className="filters-container">
           <strong>📅 Filtrar por Fecha:</strong>
           <input type="date" className="date-input" value={startDate} onChange={e => setStartDate(e.target.value)} />
