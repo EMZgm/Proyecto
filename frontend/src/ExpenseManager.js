@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ExpensesChart from './ExpensesChart';
-import BudgetSelector from './BudgetSelector'; // <--- 1. IMPORTAMOS EL SELECTOR
-import { useBudget } from './BudgetContext';
+import BudgetSelector from './BudgetSelector'; // <--- IMPORTANTE: El nuevo selector
+import { useBudget } from './BudgetContext';   // <--- IMPORTANTE: El contexto
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
 
@@ -12,13 +12,12 @@ function ExpenseManager({ token, onLogout }) {
   const [view, setView] = useState('dashboard');
   const [showChart, setShowChart] = useState(true); 
 
-  // === FILTROS (Ahora se sincronizan con el Contexto) ===
+  // === FILTROS (Sincronizados con el Contexto) ===
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [hiddenCategories, setHiddenCategories] = useState([]);
 
   // === ESTADOS PARA EDICIÓN DE LÍMITE ===
-  // Nota: El valor actual del límite viene de activeBudget, no de un estado local permanente
   const [isEditingLimit, setIsEditingLimit] = useState(false);
   const [newLimitValue, setNewLimitValue] = useState('');
 
@@ -65,7 +64,7 @@ function ExpenseManager({ token, onLogout }) {
   };
 
   // =========================================================
-  // === LÓGICA DE TEXTO PURO (Fechas) ===
+  // === HELPERS DE FECHAS ===
   // =========================================================
   const getDateString = (anyString) => {
     if (!anyString) return '';
@@ -166,7 +165,7 @@ function ExpenseManager({ token, onLogout }) {
   };
 
   // =========================================================
-  // === NUEVO: GUARDAR LÍMITE DE PRESUPUESTO ===
+  // === GUARDAR LÍMITE DE PRESUPUESTO ===
   // =========================================================
   const saveBudgetLimit = async () => {
     if (!activeBudget) return;
@@ -207,13 +206,12 @@ function ExpenseManager({ token, onLogout }) {
   };
 
   const fetchFilteredIncomes = async () => {
-    // Lo mismo para ingresos, aunque el backend filtre ingresos igual
-    const res = await authedFetch(`${API_URL}/incomes`); // (Opcional: añadir filtro fecha a incomes en backend si quieres)
+    const res = await authedFetch(`${API_URL}/incomes`); 
     if (!res) return;
     if (res.ok) {
         let data = await res.json();
         data = Array.isArray(data) ? data : [];
-        // Filtro manual para ingresos por si el backend no lo tiene aún
+        // Filtro manual para ingresos
         if (startDate && endDate) {
             data = data.filter(item => {
                 const itemDate = getDateString(item.date || item.created_at);
@@ -258,12 +256,9 @@ function ExpenseManager({ token, onLogout }) {
   };
 
   const clearFilters = () => {
-    // Al limpiar, quizás queramos volver a las fechas del presupuesto activo?
-    // Por simplicidad, limpiamos todo y el usuario verá "todo el historial"
     setStartDate('');
     setEndDate('');
     setHiddenCategories([]); 
-    // loadData se disparará por el useEffect
   };
 
   const safeExpenses = Array.isArray(expenses) ? expenses : [];
@@ -450,7 +445,7 @@ function ExpenseManager({ token, onLogout }) {
       <div style={{ margin: '10px auto', maxWidth: '1000px', background: 'white', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
           <h3 style={{margin:0}}>
-              💰 Presupuesto {activeBudget?.type === 'daily' ? 'Diario' : activeBudget?.type === 'yearly' ? 'Anual' : 'Mensual'}
+              💰 Presupuesto {activeBudget?.name || (activeBudget?.type === 'daily' ? 'Diario' : activeBudget?.type === 'weekly' ? 'Semanal' : activeBudget?.type === 'yearly' ? 'Anual' : 'Mensual')}
           </h3>
           
           {isEditingLimit ? (
@@ -582,13 +577,13 @@ function ExpenseManager({ token, onLogout }) {
                         <strong>🏷️ Categorías Visibles:</strong>
                         <div className="category-chips">
                             {allCats.map(cat => {
-                              const isChecked = !hiddenCategories.includes(cat);
-                              return (
-                                <label key={cat} className="cat-chip" style={{ opacity: isChecked ? 1 : 0.6 }}>
-                                    <input type="checkbox" checked={isChecked} onChange={() => handleToggleCategory(cat)} />
-                                    <span style={{ textDecoration: isChecked ? 'none' : 'line-through' }}>{cat}</span>
-                                </label>
-                              );
+                                const isChecked = !hiddenCategories.includes(cat);
+                                return (
+                                    <label key={cat} className="cat-chip" style={{ opacity: isChecked ? 1 : 0.6 }}>
+                                        <input type="checkbox" checked={isChecked} onChange={() => handleToggleCategory(cat)} />
+                                        <span style={{ textDecoration: isChecked ? 'none' : 'line-through' }}>{cat}</span>
+                                    </label>
+                                );
                             })}
                             {allCats.length === 0 && <span style={{color: '#999'}}>No hay categorías aún</span>}
                         </div>

@@ -14,7 +14,7 @@ const port = process.env.PORT || 3001;
 const whitelist = [
   process.env.FRONTEND_URL,      // Tu URL de Vercel (Producción)
   'http://localhost:3000',       // Desarrollo Local
-  'http://192.168.100.74:3000'   // Tu IP Local específica
+  'http://192.168.100.74:3000'   // Tu IP Local específica (opcional)
 ];
 
 const corsOptions = {
@@ -73,7 +73,7 @@ app.post('/register', async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hash = await bcrypt.hash(password, salt);
     
-    // NOTA: El Trigger de SQL creará automáticamente los 3 presupuestos
+    // NOTA: El Trigger de SQL creará automáticamente los 4 presupuestos (Diario, Semanal, Mensual, Anual)
     const newUser = await pool.query(
       'INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email', 
       [email, hash]
@@ -97,12 +97,11 @@ app.post('/login', async (req, res) => {
         return res.status(401).json({ error: 'Credenciales inválidas' });
     }
 
-    // 2. [NUEVO] Buscar cuál presupuesto está ACTIVO
+    // 2. Buscar cuál presupuesto está ACTIVO para enviarlo al frontend
     const budgetResult = await pool.query(
         'SELECT * FROM budget_configs WHERE user_id = $1 AND is_active = TRUE', 
         [user.id]
     );
-    // Si no hay ninguno activo (raro), ponemos null
     const activeBudget = budgetResult.rows[0] || null;
 
     // 3. Generar Token
@@ -117,7 +116,7 @@ app.post('/login', async (req, res) => {
         user: { 
             id: user.id, 
             email: user.email,
-            activeBudget: activeBudget // Enviamos el objeto completo del presupuesto activo
+            activeBudget: activeBudget 
         } 
     });
   } catch (err) { 
@@ -127,7 +126,7 @@ app.post('/login', async (req, res) => {
 });
 
 // =====================================================
-// 5. GESTIÓN DE PRESUPUESTOS (NUEVO)
+// 5. GESTIÓN DE PRESUPUESTOS (ACTUALIZADO)
 // =====================================================
 
 // A. Obtener todos los presupuestos del usuario
@@ -149,8 +148,7 @@ app.put('/budgets/activate/:id', authenticateToken, async (req, res) => {
         const budgetId = req.params.id;
         const userId = req.user.userId;
 
-        // Iniciar transacción para seguridad
-        await pool.query('BEGIN');
+        await pool.query('BEGIN'); // Transacción segura
 
         // 1. Desactivar todos
         await pool.query('UPDATE budget_configs SET is_active = FALSE WHERE user_id = $1', [userId]);
@@ -160,7 +158,6 @@ app.put('/budgets/activate/:id', authenticateToken, async (req, res) => {
 
         await pool.query('COMMIT');
         
-        // Devolvemos el presupuesto recién activado para actualizar el frontend
         const activeOne = await pool.query('SELECT * FROM budget_configs WHERE id = $1', [budgetId]);
         res.json(activeOne.rows[0]);
 
@@ -170,7 +167,7 @@ app.put('/budgets/activate/:id', authenticateToken, async (req, res) => {
     }
 });
 
-// C. Actualizar monto de un presupuesto
+// C. Actualizar límite de dinero
 app.put('/budgets/:id', authenticateToken, async (req, res) => {
     try {
         const { limit_amount } = req.body;
@@ -185,6 +182,44 @@ app.put('/budgets/:id', authenticateToken, async (req, res) => {
         res.json(result.rows[0]);
     } catch (err) {
         res.status(500).json({ error: 'Error actualizando monto' });
+    }
+});
+
+// D. [NUEVO] CREAR Presupuesto Personalizado
+app.post('/budgets', authenticateToken, async (req, res) => {
+    const { name, start_date, end_date, limit_amount } = req.body;
+    try {
+      const newBudget = await pool.query(
+        `INSERT INTO budget_configs (user_id, name, type, start_date, end_date, limit_amount, is_active) 
+         VALUES ($1, $2, 'custom', $3, $4, $5, FALSE) 
+         RETURNING *`,
+        [req.user.userId, name, start_date, end_date, limit_amount || 0]
+      );
+      res.json(newBudget.rows[0]);
+    } catch (err) {
+      console.error(err);
+      res.status(500).send('Error creando presupuesto');
+    }
+});
+  
+// E. [NUEVO] BORRAR Presupuesto (Solo Custom)
+app.delete('/budgets/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    try {
+      // Verificamos que sea 'custom' antes de borrar para proteger los automáticos
+      const check = await pool.query(
+          "SELECT * FROM budget_configs WHERE id = $1 AND user_id = $2", 
+          [id, req.user.userId]
+      );
+  
+      if (check.rows.length === 0) return res.status(404).send('Presupuesto no encontrado');
+      if (check.rows[0].type !== 'custom') return res.status(400).send('No puedes borrar los presupuestos automáticos');
+  
+      await pool.query("DELETE FROM budget_configs WHERE id = $1", [id]);
+      res.json({ message: "Presupuesto eliminado" });
+    } catch (err) {
+      console.error(err);
+      res.status(500).send('Error eliminando presupuesto');
     }
 });
 
@@ -278,9 +313,10 @@ app.post('/expenses', authenticateToken, async (req, res) => {
 
     if (amount <= 0) return res.status(400).json({error: 'Monto requerido'});
 
-    // IMPORTANTE: Ahora también insertamos 'date' si viene en el body, si no, CURRENT_DATE
-    const r = await pool.query('INSERT INTO expenses (amount, description, category, custom_data, user_id, date) VALUES ($1, $2, $3, $4, $5, COALESCE($6, CURRENT_DATE)) RETURNING *', 
-        [amount, description, category, custom_data, userId, formData.date]);
+    const r = await pool.query(
+        'INSERT INTO expenses (amount, description, category, custom_data, user_id, date) VALUES ($1, $2, $3, $4, $5, COALESCE($6, CURRENT_DATE)) RETURNING *', 
+        [amount, description, category, custom_data, userId, formData.date]
+    );
     res.status(201).json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: 'Error creando gasto' }); }
 });
@@ -300,6 +336,7 @@ app.put('/expenses/:id', authenticateToken, async (req, res) => {
 
     if (amount <= 0) return res.status(400).json({error: 'Monto requerido'});
 
+    // Nota: Aquí también podrías permitir editar la fecha si quisieras, agregando "date=$7"
     const result = await pool.query(
       'UPDATE expenses SET amount=$1, description=$2, category=$3, custom_data=$4 WHERE id=$5 AND user_id=$6 RETURNING *',
       [amount, description, category, custom_data, id, userId]
@@ -315,12 +352,11 @@ app.get('/expenses', authenticateToken, async (req, res) => {
     const { startDate, endDate } = req.query;
     const userId = req.user.userId;
 
-    // CONSULTA FILTRABLE POR FECHAS (Vital para el nuevo sistema)
+    // CONSULTA FILTRABLE POR FECHAS (Vital para el Selector de Presupuestos)
     let query = 'SELECT * FROM expenses WHERE user_id = $1';
     let params = [userId];
 
     if (startDate && endDate) {
-      // Usamos la columna 'date' (o created_at si prefieres, pero 'date' es más preciso para control)
       query += ' AND date BETWEEN $2 AND $3';
       params.push(startDate, endDate);
     }
@@ -358,8 +394,10 @@ app.post('/incomes', authenticateToken, async (req, res) => {
 
     if (amount <= 0) return res.status(400).json({error: 'Monto requerido'});
 
-    const r = await pool.query('INSERT INTO incomes (amount, description, custom_data, user_id, date) VALUES ($1, $2, $3, $4, COALESCE($5, CURRENT_DATE)) RETURNING *', 
-        [amount, description, custom_data, userId, formData.date]);
+    const r = await pool.query(
+        'INSERT INTO incomes (amount, description, custom_data, user_id, date) VALUES ($1, $2, $3, $4, COALESCE($5, CURRENT_DATE)) RETURNING *', 
+        [amount, description, custom_data, userId, formData.date]
+    );
     res.status(201).json(r.rows[0]);
   } catch (err) { res.status(500).json({ error: 'Error creando ingreso' }); }
 });
@@ -390,6 +428,7 @@ app.put('/incomes/:id', authenticateToken, async (req, res) => {
 
 app.get('/incomes', authenticateToken, async (req, res) => {
     try {
+        // Podrías agregar filtro de fecha aquí también si quisieras
         const r = await pool.query('SELECT * FROM incomes WHERE user_id = $1 ORDER BY date DESC, created_at DESC', [req.user.userId]); 
         res.json(r.rows);
     } catch (err) { res.status(500).json({error: 'Error obteniendo ingresos'}); }

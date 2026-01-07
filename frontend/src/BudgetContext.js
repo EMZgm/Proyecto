@@ -3,30 +3,28 @@ import React, { createContext, useState, useContext } from 'react';
 // 1. EL CONTEXTO
 const BudgetContext = createContext();
 
-// 2. UTILIDAD PARA CALCULAR FECHAS (Ahora incluye SEMANAL)
+// 2. UTILIDAD PARA CALCULAR FECHAS
 const getDateRange = (type) => {
   const now = new Date();
-  let start = new Date(now); // Copiamos la fecha actual
+  let start = new Date(now);
   let end = new Date(now);
 
-  // Reseteamos horas para evitar problemas de zona horaria en comparaciones
+  // Reseteamos horas
   start.setHours(0, 0, 0, 0);
   end.setHours(23, 59, 59, 999);
 
   if (type === 'daily') {
-    // Ya está configurado (hoy 00:00 a hoy 23:59)
+    // Ya está configurado
   } 
   else if (type === 'weekly') {
-    // Calcular el Lunes de esta semana
-    const day = now.getDay(); // 0 es Domingo, 1 es Lunes...
-    // Si es domingo (0), restamos 6 días. Si es otro día, restamos (day - 1)
+    const day = now.getDay(); // 0 Domingo, 1 Lunes...
     const diff = now.getDate() - day + (day === 0 ? -6 : 1); 
     
-    start.setDate(diff); // Establecer al Lunes
+    start.setDate(diff); // Lunes
     start.setHours(0, 0, 0, 0);
 
     end = new Date(start);
-    end.setDate(start.getDate() + 6); // Lunes + 6 días = Domingo
+    end.setDate(start.getDate() + 6); // Domingo
     end.setHours(23, 59, 59, 999);
   }
   else if (type === 'monthly') {
@@ -55,6 +53,7 @@ export const BudgetProvider = ({ children }) => {
 
   const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
 
+  // --- OBTENER PRESUPUESTOS ---
   const fetchBudgets = async (token) => {
     try {
       const res = await fetch(`${API_URL}/budgets`, {
@@ -75,26 +74,26 @@ export const BudgetProvider = ({ children }) => {
     }
   };
 
-  // LOGICA ACTUALIZADA PARA CUSTOM
+  // --- HELPER DE ESTADO ---
   const updateActiveState = (budget) => {
     setActiveBudget(budget);
     
     let dates;
     if (budget.type === 'custom') {
-      // Si es personalizado, usamos las fechas fijas que vienen de la BD
-      // Asegúrate de que tu BD devuelva start_date y end_date en formato YYYY-MM-DD
+      // Usamos las fechas de la BD para los personalizados
       dates = {
         startDate: budget.start_date ? budget.start_date.split('T')[0] : null,
         endDate: budget.end_date ? budget.end_date.split('T')[0] : null
       };
     } else {
-      // Si es estándar (diario, semanal, mensual, anual), calculamos dinámicamente
+      // Calculamos dinámicamente para los automáticos
       dates = getDateRange(budget.type);
     }
     
     setDateRange(dates);
   };
 
+  // --- ACTIVAR UN PRESUPUESTO ---
   const switchBudget = async (budgetId, token) => {
     try {
       const res = await fetch(`${API_URL}/budgets/activate/${budgetId}`, {
@@ -115,6 +114,46 @@ export const BudgetProvider = ({ children }) => {
     }
   };
 
+  // --- CREAR NUEVO (Personalizado) ---
+  const addBudget = async (budgetData, token) => {
+    try {
+      const res = await fetch(`${API_URL}/budgets`, {
+        method: 'POST',
+        headers: { 
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}` 
+        },
+        body: JSON.stringify(budgetData)
+      });
+      
+      if (res.ok) {
+        await fetchBudgets(token); // Recargamos la lista para que aparezca
+        return true;
+      }
+    } catch (err) { console.error("Error creando presupuesto", err); }
+    return false;
+  };
+
+  // --- BORRAR (Solo Custom) ---
+  const deleteBudget = async (id, token) => {
+    try {
+      const res = await fetch(`${API_URL}/budgets/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (res.ok) {
+        // Si el usuario borra el presupuesto que tiene activo actualmente,
+        // lo cambiamos al 'monthly' para evitar errores visuales.
+        if (activeBudget && activeBudget.id === id) {
+            const monthly = budgets.find(b => b.type === 'monthly');
+            if (monthly) switchBudget(monthly.id, token);
+        }
+        await fetchBudgets(token); // Recargamos la lista
+      }
+    } catch (err) { console.error("Error borrando presupuesto", err); }
+  };
+
   return (
     <BudgetContext.Provider value={{ 
       budgets, 
@@ -122,7 +161,9 @@ export const BudgetProvider = ({ children }) => {
       dateRange, 
       loading, 
       fetchBudgets, 
-      switchBudget 
+      switchBudget,
+      addBudget,    // <--- NUEVO
+      deleteBudget  // <--- NUEVO
     }}>
       {children}
     </BudgetContext.Provider>
