@@ -1,23 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ExpensesChart from './ExpensesChart';
-//pequeño cambio
+import BudgetSelector from './BudgetSelector'; // <--- 1. IMPORTAMOS EL SELECTOR
+import { useBudget } from '../context/BudgetContext'; // <--- 2. IMPORTAMOS EL CONTEXTO
+
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
 
 function ExpenseManager({ token, onLogout }) {
+  // === CONTEXTO DE PRESUPUESTOS ===
+  const { activeBudget, dateRange, fetchBudgets } = useBudget();
+
   const [view, setView] = useState('dashboard');
   const [showChart, setShowChart] = useState(true); 
 
-  // === FILTROS ===
+  // === FILTROS (Ahora se sincronizan con el Contexto) ===
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [hiddenCategories, setHiddenCategories] = useState([]);
 
-  // === NUEVO: ESTADOS PARA PRESUPUESTO ===
-  // Intentamos leer del localStorage inicial para que no se resetee a 0 al recargar
-  const [budgetLimit, setBudgetLimit] = useState(() => {
-    const saved = localStorage.getItem('user_budget_limit');
-    return saved ? parseFloat(saved) : 0;
-  });
+  // === ESTADOS PARA EDICIÓN DE LÍMITE ===
+  // Nota: El valor actual del límite viene de activeBudget, no de un estado local permanente
   const [isEditingLimit, setIsEditingLimit] = useState(false);
   const [newLimitValue, setNewLimitValue] = useState('');
 
@@ -88,7 +89,36 @@ function ExpenseManager({ token, onLogout }) {
   };
 
   // =========================================================
-  // === NUEVO: FUNCIÓN EXPORTAR A CSV ===
+  // === SINCRONIZACIÓN CON EL CONTEXTO (LA MAGIA) ===
+  // =========================================================
+  
+  // 1. Cargar presupuestos al iniciar
+  useEffect(() => {
+    if (token) {
+        fetchBudgets(token);
+    }
+    // eslint-disable-next-line
+  }, [token]);
+
+  // 2. Cuando el Contexto cambie las fechas (ej: al cambiar de Mensual a Diario), actualizamos los filtros locales
+  useEffect(() => {
+    if (dateRange.startDate && dateRange.endDate) {
+        setStartDate(dateRange.startDate);
+        setEndDate(dateRange.endDate);
+    }
+  }, [dateRange]);
+
+  // 3. Cuando cambien las fechas (sea por el usuario o por el contexto), recargamos los datos
+  useEffect(() => {
+    if (token) {
+        loadData();
+    }
+    // eslint-disable-next-line
+  }, [token, startDate, endDate]);
+
+
+  // =========================================================
+  // === EXPORTAR A CSV ===
   // =========================================================
   const downloadReport = () => {
     const allData = [
@@ -113,7 +143,6 @@ function ExpenseManager({ token, onLogout }) {
       return;
     }
 
-    // Ordenar por fecha descendente
     allData.sort((a, b) => new Date(getDateString(b.Fecha)) - new Date(getDateString(a.Fecha)));
 
     const headers = ['Fecha', 'Tipo', 'Categoria', 'Descripcion', 'Monto'];
@@ -137,20 +166,22 @@ function ExpenseManager({ token, onLogout }) {
   };
 
   // =========================================================
-  // === NUEVO: GUARDAR PRESUPUESTO ===
+  // === NUEVO: GUARDAR LÍMITE DE PRESUPUESTO ===
   // =========================================================
   const saveBudgetLimit = async () => {
+    if (!activeBudget) return;
     const val = parseFloat(newLimitValue);
     if (isNaN(val) || val < 0) return alert('Ingresa un número válido');
 
-    const res = await authedFetch(`${API_URL}/update-limit`, {
+    // Usamos la nueva ruta del backend para actualizar el presupuesto específico
+    const res = await authedFetch(`${API_URL}/budgets/${activeBudget.id}`, {
         method: 'PUT',
-        body: JSON.stringify({ limit: val })
+        body: JSON.stringify({ limit_amount: val })
     });
 
     if (res && res.ok) {
-        setBudgetLimit(val);
-        localStorage.setItem('user_budget_limit', val); // Guardar en caché local
+        // Recargamos el contexto para que se actualice la barra visualmente
+        fetchBudgets(token); 
         setIsEditingLimit(false);
     } else {
         alert('Error al actualizar el límite');
@@ -159,27 +190,30 @@ function ExpenseManager({ token, onLogout }) {
 
   // === CARGA DE DATOS ===
   const fetchFilteredExpenses = async () => {
-    const res = await authedFetch(`${API_URL}/expenses`);
+    // Construimos la URL con parámetros para que el backend filtre (más eficiente)
+    let url = `${API_URL}/expenses`;
+    const params = new URLSearchParams();
+    if (startDate) params.append('startDate', startDate);
+    if (endDate) params.append('endDate', endDate);
+    
+    if (startDate || endDate) url += `?${params.toString()}`;
+
+    const res = await authedFetch(url);
     if (!res) return;
     if (res.ok) {
         let data = await res.json();
-        data = Array.isArray(data) ? data : [];
-        if (startDate && endDate) {
-            data = data.filter(item => {
-                const itemDate = getDateString(item.date || item.created_at);
-                return itemDate >= startDate && itemDate <= endDate;
-            });
-        }
-        setExpenses(data);
+        setExpenses(Array.isArray(data) ? data : []);
     }
   };
 
   const fetchFilteredIncomes = async () => {
-    const res = await authedFetch(`${API_URL}/incomes`);
+    // Lo mismo para ingresos, aunque el backend filtre ingresos igual
+    const res = await authedFetch(`${API_URL}/incomes`); // (Opcional: añadir filtro fecha a incomes en backend si quieres)
     if (!res) return;
     if (res.ok) {
         let data = await res.json();
         data = Array.isArray(data) ? data : [];
+        // Filtro manual para ingresos por si el backend no lo tiene aún
         if (startDate && endDate) {
             data = data.filter(item => {
                 const itemDate = getDateString(item.date || item.created_at);
@@ -207,11 +241,6 @@ function ExpenseManager({ token, onLogout }) {
     if (incFieldRes && incFieldRes.ok) setIncomeFields(await incFieldRes.json());
   };
 
-  useEffect(() => { 
-    if (token) loadData(); 
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
-
   // === HELPERS DE CÁLCULO ===
   const safeCategories = Array.isArray(categories) ? categories : [];
   const allCats = [...new Set(['Varios', ...safeCategories.map(c => c.name)])];
@@ -225,16 +254,16 @@ function ExpenseManager({ token, onLogout }) {
 
   const handleFilterDate = (e) => {
     e.preventDefault();
-    fetchFilteredExpenses();
-    fetchFilteredIncomes();
+    loadData(); // Reutilizamos loadData que ya lee startDate y endDate
   };
 
   const clearFilters = () => {
+    // Al limpiar, quizás queramos volver a las fechas del presupuesto activo?
+    // Por simplicidad, limpiamos todo y el usuario verá "todo el historial"
     setStartDate('');
     setEndDate('');
     setHiddenCategories([]); 
-    authedFetch(`${API_URL}/expenses`).then(r => r.json()).then(d => setExpenses(Array.isArray(d) ? d : []));
-    authedFetch(`${API_URL}/incomes`).then(r => r.json()).then(d => setIncomes(Array.isArray(d) ? d : []));
+    // loadData se disparará por el useEffect
   };
 
   const safeExpenses = Array.isArray(expenses) ? expenses : [];
@@ -250,8 +279,10 @@ function ExpenseManager({ token, onLogout }) {
     return sum + (parseFloat(e.amount) || 0);
   }, 0);
 
-  // === NUEVO: CÁLCULOS PARA BARRA DE PRESUPUESTO ===
-  const budgetPercentage = budgetLimit > 0 ? (totalExp / budgetLimit) * 100 : 0;
+  // === CÁLCULOS PARA BARRA DE PRESUPUESTO (Usando activeBudget) ===
+  const currentLimit = activeBudget ? parseFloat(activeBudget.limit_amount) : 0;
+  const budgetPercentage = currentLimit > 0 ? (totalExp / currentLimit) * 100 : 0;
+  
   let progressColor = '#4caf50'; // Verde
   if (budgetPercentage >= 80) progressColor = '#ff9800'; // Naranja
   if (budgetPercentage >= 100) progressColor = '#f44336'; // Rojo
@@ -403,7 +434,6 @@ function ExpenseManager({ token, onLogout }) {
       <header>
         <h1>Mi bolsillo</h1>
         <div style={{display:'flex', gap:'10px'}}>
-            {/* NUEVO BOTÓN EXCEL */}
             <button onClick={downloadReport} className="excel-btn" style={{background:'#217346', color:'white', border:'none', padding:'5px 10px', borderRadius:'4px', cursor:'pointer', fontWeight:'bold'}}>
                 📥 Excel
             </button>
@@ -411,10 +441,18 @@ function ExpenseManager({ token, onLogout }) {
         </div>
       </header>
 
-      {/* === NUEVO: SECCIÓN DE PRESUPUESTO === */}
-      <div style={{ margin: '20px auto', maxWidth: '1000px', background: 'white', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
+      {/* === NUEVO COMPONENTE: SELECTOR DE PRESUPUESTO === */}
+      <div style={{ margin: '0 auto', maxWidth: '1000px', padding: '0 15px' }}>
+         <BudgetSelector />
+      </div>
+
+      {/* === SECCIÓN DE PRESUPUESTO ACTUAL === */}
+      <div style={{ margin: '10px auto', maxWidth: '1000px', background: 'white', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-          <h3 style={{margin:0}}>💰 Presupuesto Mensual</h3>
+          <h3 style={{margin:0}}>
+              💰 Presupuesto {activeBudget?.type === 'daily' ? 'Diario' : activeBudget?.type === 'yearly' ? 'Anual' : 'Mensual'}
+          </h3>
+          
           {isEditingLimit ? (
             <div style={{ display: 'flex', gap: '5px' }}>
               <input 
@@ -430,15 +468,15 @@ function ExpenseManager({ token, onLogout }) {
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <span style={{ fontSize: '1.1rem', fontWeight: 'bold' }}>
-                {budgetLimit > 0 ? `$${budgetLimit.toFixed(2)}` : 'Sin límite definido'}
+                {currentLimit > 0 ? `$${currentLimit.toFixed(2)}` : 'Sin límite'}
               </span>
-              <button onClick={() => { setIsEditingLimit(true); setNewLimitValue(budgetLimit); }} style={{ cursor: 'pointer', background: 'none', border: '1px solid #ccc', borderRadius: '4px', padding: '2px 8px', fontSize:'0.8rem' }}>✏️ Editar</button>
+              <button onClick={() => { setIsEditingLimit(true); setNewLimitValue(currentLimit); }} style={{ cursor: 'pointer', background: 'none', border: '1px solid #ccc', borderRadius: '4px', padding: '2px 8px', fontSize:'0.8rem' }}>✏️ Editar</button>
             </div>
           )}
         </div>
 
         {/* BARRA DE PROGRESO */}
-        {budgetLimit > 0 && (
+        {currentLimit > 0 && (
             <>
                 <div style={{ width: '100%', height: '20px', background: '#e0e0e0', borderRadius: '10px', overflow: 'hidden', position: 'relative' }}>
                 <div style={{ 
@@ -456,7 +494,7 @@ function ExpenseManager({ token, onLogout }) {
                 {/* ALERTAS */}
                 {budgetPercentage >= 100 && (
                     <div style={{ marginTop: '10px', padding: '8px', background: '#ffebee', color: '#c62828', borderRadius: '5px', fontSize:'0.9rem' }}>
-                        ⚠️ <b>¡CUIDADO!</b> Has excedido tu presupuesto mensual.
+                        ⚠️ <b>¡CUIDADO!</b> Has excedido tu presupuesto.
                     </div>
                 )}
                 {budgetPercentage >= 80 && budgetPercentage < 100 && (
@@ -480,14 +518,14 @@ function ExpenseManager({ token, onLogout }) {
         </div>
       </div>
 
-      {/* FILTROS */}
+      {/* FILTROS MANUALES (Sincronizados) */}
       <div className="filters-container">
-          <strong>📅 Filtrar por Fecha:</strong>
+          <strong>📅 Rango de Fechas:</strong>
           <input type="date" className="date-input" value={startDate} onChange={e => setStartDate(e.target.value)} />
           <span style={{color: '#999'}}>—</span>
           <input type="date" className="date-input" value={endDate} onChange={e => setEndDate(e.target.value)} />
-          <button onClick={handleFilterDate} className="filter-btn">Ver</button>
-          {(startDate || endDate) && (<button onClick={clearFilters} className="clear-btn">Limpiar</button>)}
+          <button onClick={handleFilterDate} className="filter-btn">Actualizar</button>
+          {(startDate || endDate) && (<button onClick={clearFilters} className="clear-btn">Limpiar / Ver Todo</button>)}
       </div>
 
       <div className="content">
@@ -507,7 +545,7 @@ function ExpenseManager({ token, onLogout }) {
 
         <div className="lists-column">
           <div className="income-list">
-             <h3>Ingresos Recientes {startDate ? '(Filtrados)' : ''}</h3>
+             <h3>Ingresos {startDate ? '(Filtrados)' : 'Recientes'}</h3>
              {Array.isArray(safeIncomes) && safeIncomes.length > 0 ? (
                safeIncomes.map(inc => (
                  <article key={inc.id} className="income-card">
@@ -515,11 +553,11 @@ function ExpenseManager({ token, onLogout }) {
                    <div className="card-actions"><button onClick={() => openEditModal(inc, 'income')} className="edit-btn">✏️</button><button onClick={() => handleDelete('incomes', inc.id)} className="delete-btn">&times;</button></div>
                  </article>
                ))
-             ) : (<p style={{ color: '#999', textAlign: 'center', padding: '20px' }}>No hay ingresos registrados</p>)}
+             ) : (<p style={{ color: '#999', textAlign: 'center', padding: '20px' }}>No hay ingresos en este rango</p>)}
           </div>
           
           <div className="expense-list">
-            <h3>Gastos Recientes {hiddenCategories.length > 0 || startDate ? '(Filtrados)' : ''}</h3>
+            <h3>Gastos {hiddenCategories.length > 0 || startDate ? '(Filtrados)' : 'Recientes'}</h3>
             {Array.isArray(expensesFilteredByCat) && expensesFilteredByCat.length > 0 ? (
               expensesFilteredByCat.map(exp => (
                 <article key={exp.id} className="expense-card">
@@ -527,7 +565,7 @@ function ExpenseManager({ token, onLogout }) {
                   <div className="card-actions"><button onClick={() => openEditModal(exp, 'expense')} className="edit-btn">✏️</button><button onClick={() => handleDelete('expenses', exp.id)} className="delete-btn">&times;</button></div>
                 </article>
               ))
-            ) : (<p style={{ color: '#999', textAlign: 'center', padding: '20px' }}>No hay gastos para mostrar</p>)}
+            ) : (<p style={{ color: '#999', textAlign: 'center', padding: '20px' }}>No hay gastos en este rango</p>)}
           </div>
         </div>
       </div>
