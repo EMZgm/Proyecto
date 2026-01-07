@@ -1,92 +1,130 @@
 -- ==============================================================
--- BASE DE DATOS FINAL: GESTOR DE GASTOS (DINÁMICO + ORDENABLE)
--- ==============================================================
-
 -- 1. TABLA DE USUARIOS
--- Maneja el inicio de sesión
+-- ==============================================================
 CREATE TABLE users (
   id SERIAL PRIMARY KEY,
   email VARCHAR(255) UNIQUE NOT NULL,
   password_hash TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+  -- NOTA: Ya no guardamos monthly_limit aquí.
 );
 
--- 2. TABLA DE CATEGORÍAS
--- Opciones para el desplegable "Categoría" en Gastos
+-- ==============================================================
+-- 2. TABLA DE CONFIGURACIÓN DE PRESUPUESTOS (NUEVA)
+-- Aquí vive la lógica de tu "Idea Loca"
+-- ==============================================================
+CREATE TABLE budget_configs (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  
+  -- Nombre visible: "Presupuesto Diario", "Vacaciones", etc.
+  name VARCHAR(50) NOT NULL,
+  
+  -- Tipo de lógica que usará el Frontend
+  type VARCHAR(20) NOT NULL CHECK (type IN ('daily', 'monthly', 'yearly', 'custom')),
+  
+  -- El límite de dinero asignado a este presupuesto
+  limit_amount NUMERIC(12, 2) DEFAULT 0,
+  
+  -- Fechas específicas (Solo se usan si type es 'custom')
+  custom_start_date DATE,
+  custom_end_date DATE,
+  
+  -- Define cuál es el que se muestra actualmente en el Dashboard
+  is_active BOOLEAN DEFAULT FALSE,
+  
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ==============================================================
+-- 3. TABLA DE CATEGORÍAS
+-- ==============================================================
 CREATE TABLE categories (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-  -- Evita que un usuario cree dos categorías con el mismo nombre
   UNIQUE(user_id, name) 
 );
 
--- 3. TABLA DE CONFIGURACIÓN DE CAMPOS (CEREBRO DEL SISTEMA)
--- Define qué campos se muestran en los formularios y EN QUÉ ORDEN
+-- ==============================================================
+-- 4. TABLA DE CAMPOS DINÁMICOS (FORM FIELDS)
+-- ==============================================================
 CREATE TABLE form_fields (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  
-  -- 'expense' o 'income' (Para saber a qué formulario pertenece)
-  context VARCHAR(50) NOT NULL, 
-  
-  -- Identificador interno (ej: 'amount', 'lugar', 'cliente')
+  context VARCHAR(50) NOT NULL, -- 'expense' o 'income'
   field_key VARCHAR(50) NOT NULL, 
-  
-  -- Nombre visible (ej: 'Monto ($)', 'Lugar de compra')
   label VARCHAR(100) NOT NULL,    
-  
-  -- Tipo de input (ej: 'text', 'number', 'select')
   type VARCHAR(50) NOT NULL,      
-  
-  -- TRUE si es un campo vital (Monto, Descripción), FALSE si es personalizado
   is_core BOOLEAN DEFAULT FALSE,  
-  
-  -- Si es FALSE, el campo no se muestra (borrado lógico)
   is_enabled BOOLEAN DEFAULT TRUE, 
-  
-  -- ESTA ES LA NUEVA COLUMNA: Controla la posición en la lista (0, 1, 2...)
   ordering INTEGER DEFAULT 0,     
-  
   created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
--- 4. TABLA DE GASTOS
+-- ==============================================================
+-- 5. TABLA DE GASTOS
+-- ==============================================================
 CREATE TABLE expenses (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  
-  -- Campos Físicos (Core)
   amount NUMERIC(10, 2) NOT NULL,
   description TEXT, 
   category TEXT, 
-  
-  -- Campos Dinámicos (Aquí se guardan los valores de tus campos extra)
   custom_data JSONB DEFAULT '{}', 
-  
+  date DATE DEFAULT CURRENT_DATE, -- Agrego fecha explícita por si acaso
   created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
--- 5. TABLA DE INGRESOS
+-- ==============================================================
+-- 6. TABLA DE INGRESOS
+-- ==============================================================
 CREATE TABLE incomes (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  
-  -- Campos Físicos (Core)
   amount NUMERIC(10, 2) NOT NULL,
   description TEXT,
-  
-  -- Campos Dinámicos
   custom_data JSONB DEFAULT '{}',
-  
+  date DATE DEFAULT CURRENT_DATE,
   created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
--- 6. ÍNDICES (Para optimizar la velocidad de la App)
+-- ==============================================================
+-- 7. ÍNDICES (VELOCIDAD)
+-- ==============================================================
 CREATE INDEX idx_expenses_user ON expenses(user_id);
 CREATE INDEX idx_incomes_user ON incomes(user_id);
-CREATE INDEX idx_form_fields_user ON form_fields(user_id);
-CREATE INDEX idx_form_fields_ordering ON form_fields(user_id, context, ordering);
+CREATE INDEX idx_budget_configs_user ON budget_configs(user_id);
+CREATE INDEX idx_expenses_date ON expenses(date); -- Útil para filtrar por fechas
 
-ALTER TABLE users ADD COLUMN monthly_limit NUMERIC(10, 2) DEFAULT 0;
+-- ==============================================================
+-- 8. AUTOMATIZACIÓN (TRIGGER)
+-- Esto crea los 3 presupuestos automáticamente al registrarse
+-- ==============================================================
+
+-- Función que se ejecuta tras crear un usuario
+CREATE OR REPLACE FUNCTION create_default_budgets()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- 1. Crear Presupuesto DIARIO (Inactivo)
+    INSERT INTO budget_configs (user_id, name, type, limit_amount, is_active)
+    VALUES (NEW.id, 'Presupuesto Diario', 'daily', 0, FALSE);
+
+    -- 2. Crear Presupuesto MENSUAL (ACTIVO por defecto)
+    INSERT INTO budget_configs (user_id, name, type, limit_amount, is_active)
+    VALUES (NEW.id, 'Presupuesto Mensual', 'monthly', 0, TRUE);
+
+    -- 3. Crear Presupuesto ANUAL (Inactivo)
+    INSERT INTO budget_configs (user_id, name, type, limit_amount, is_active)
+    VALUES (NEW.id, 'Presupuesto Anual', 'yearly', 0, FALSE);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- El Trigger que conecta la función con la tabla users
+CREATE TRIGGER trigger_create_budgets_on_register
+AFTER INSERT ON users
+FOR EACH ROW
+EXECUTE FUNCTION create_default_budgets();
