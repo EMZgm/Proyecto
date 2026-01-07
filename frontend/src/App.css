@@ -386,6 +386,32 @@ button[type="submit"] {
 .cancel-btn { background-color: #95a5a6 !important; margin-top: 0 !important; }
 .cancel-btn:hover { background-color: #7f8c8d !important; }
 
+/* Agrega esto en la sección de HEADER PRINCIPAL de tu CSS */
+
+.excel-btn {
+  position: absolute; /* Esto es la clave: lo saca del flujo normal */
+  top: 0;
+  left: 0;            /* Lo pega a la izquierda */
+  
+  /* Estilos visuales (copiados para que coincidan con el tamaño del logout) */
+  background: #217346; /* Color verde Excel */
+  color: white;
+  border: none;
+  padding: 8px 15px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.3s;
+}
+
+.excel-btn:hover {
+  background: #1e6b41;
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(-20px); }
   to { opacity: 1; transform: translateY(0); }

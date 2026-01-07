@@ -472,8 +472,8 @@ function ExpenseManager({ token, onLogout }) {
       <header>
         <h1>Mi bolsillo</h1>
         <div style={{display:'flex', gap:'10px'}}>
-            <button onClick={downloadReport} className="excel-btn" style={{background:'#217346', color:'white', border:'none', padding:'5px 10px', borderRadius:'4px', cursor:'pointer', fontWeight:'bold'}}>
-                📥 Excel
+            <button onClick={downloadReport} className="excel-btn">
+              ❎ Generar Excel
             </button>
             <button onClick={onLogout} className="logout-btn">Cerrar Sesión</button>
         </div>
