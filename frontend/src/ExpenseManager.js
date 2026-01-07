@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { utils, writeFile } from 'xlsx-js-style'; // <--- LIBRERÍA PARA EXCEL BONITO
 import ExpensesChart from './ExpensesChart';
-import BudgetSelector from './BudgetSelector'; // <--- IMPORTANTE: El nuevo selector
-import { useBudget } from './BudgetContext';   // <--- IMPORTANTE: El contexto
+import BudgetSelector from './BudgetSelector'; 
+import { useBudget } from './BudgetContext'; 
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
 
@@ -88,10 +89,9 @@ function ExpenseManager({ token, onLogout }) {
   };
 
   // =========================================================
-  // === SINCRONIZACIÓN CON EL CONTEXTO (LA MAGIA) ===
+  // === SINCRONIZACIÓN CON EL CONTEXTO ===
   // =========================================================
   
-  // 1. Cargar presupuestos al iniciar
   useEffect(() => {
     if (token) {
         fetchBudgets(token);
@@ -99,7 +99,6 @@ function ExpenseManager({ token, onLogout }) {
     // eslint-disable-next-line
   }, [token]);
 
-  // 2. Cuando el Contexto cambie las fechas (ej: al cambiar de Mensual a Diario), actualizamos los filtros locales
   useEffect(() => {
     if (dateRange.startDate && dateRange.endDate) {
         setStartDate(dateRange.startDate);
@@ -107,7 +106,6 @@ function ExpenseManager({ token, onLogout }) {
     }
   }, [dateRange]);
 
-  // 3. Cuando cambien las fechas (sea por el usuario o por el contexto), recargamos los datos
   useEffect(() => {
     if (token) {
         loadData();
@@ -117,19 +115,20 @@ function ExpenseManager({ token, onLogout }) {
 
 
   // =========================================================
-  // === EXPORTAR A CSV ===
+  // === EXPORTAR A EXCEL (Estilizado) ===
   // =========================================================
   const downloadReport = () => {
-    const allData = [
+    // 1. Preparar datos
+    const data = [
       ...expenses.map(e => ({
-        Fecha: e.date || e.created_at,
+        Fecha: getDateString(e.date || e.created_at),
         Tipo: 'Gasto',
         Categoria: e.category || 'Varios',
         Descripcion: e.description || '',
         Monto: parseFloat(e.amount) * -1
       })),
       ...incomes.map(i => ({
-        Fecha: i.date || i.created_at,
+        Fecha: getDateString(i.date || i.created_at),
         Tipo: 'Ingreso',
         Categoria: 'Ingreso General',
         Descripcion: i.description || '',
@@ -137,31 +136,79 @@ function ExpenseManager({ token, onLogout }) {
       }))
     ];
 
-    if (allData.length === 0) {
-      alert("No hay datos para exportar.");
-      return;
+    if (data.length === 0) return alert("No hay datos para exportar.");
+
+    // Ordenar por fecha descendente
+    data.sort((a, b) => new Date(b.Fecha) - new Date(a.Fecha));
+
+    // 2. Crear Hoja
+    const ws = utils.json_to_sheet(data);
+
+    // 3. Estilos: Ancho de columnas
+    const colWidths = [
+      { wch: 12 }, // Fecha
+      { wch: 10 }, // Tipo
+      { wch: 20 }, // Categoria
+      { wch: 35 }, // Descripcion
+      { wch: 12 }  // Monto
+    ];
+    ws['!cols'] = colWidths;
+
+    // 4. Estilos: Celdas y Encabezados
+    const headerStyle = {
+      font: { bold: true, color: { rgb: "FFFFFF" } },
+      fill: { fgColor: { rgb: "4472C4" } }, // Azul profesional
+      alignment: { horizontal: "center" }
+    };
+
+    const range = utils.decode_range(ws['!ref']);
+    
+    for (let R = range.s.r; R <= range.e.r; ++R) {
+      for (let C = range.s.c; C <= range.e.c; ++C) {
+        const cellAddress = utils.encode_cell({ r: R, c: C });
+        if (!ws[cellAddress]) continue;
+
+        // Estilo Encabezado
+        if (R === 0) {
+          ws[cellAddress].s = headerStyle;
+        } 
+        // Estilo Datos
+        else {
+          ws[cellAddress].s = {
+             border: {
+               top: { style: "thin", color: { rgb: "CCCCCC" } },
+               bottom: { style: "thin", color: { rgb: "CCCCCC" } }
+             }
+          };
+
+          // Colorear montos (Columna índice 4)
+          if (C === 4) {
+               const valor = ws[cellAddress].v;
+               ws[cellAddress].s = {
+                   ...ws[cellAddress].s,
+                   font: { 
+                      bold: true, 
+                      color: { rgb: valor >= 0 ? "006100" : "9C0006" } // Verde o Rojo oscuro
+                   },
+                   fill: {
+                      fgColor: { rgb: valor >= 0 ? "C6EFCE" : "FFC7CE" } // Fondo suave
+                   }
+               };
+               ws[cellAddress].z = '"$"#,##0.00'; // Formato moneda
+          }
+          
+          // Centrar columnas cortas
+          if (C === 0 || C === 1) {
+              ws[cellAddress].s.alignment = { horizontal: "center" };
+          }
+        }
+      }
     }
 
-    allData.sort((a, b) => new Date(getDateString(b.Fecha)) - new Date(getDateString(a.Fecha)));
-
-    const headers = ['Fecha', 'Tipo', 'Categoria', 'Descripcion', 'Monto'];
-    const csvRows = [
-      headers.join(','),
-      ...allData.map(row => {
-        const safeDesc = `"${row.Descripcion.replace(/"/g, '""')}"`;
-        const cleanDate = getDateString(row.Fecha);
-        return `${cleanDate},${row.Tipo},${row.Categoria},${safeDesc},${row.Monto}`;
-      })
-    ].join('\n');
-
-    const blob = new Blob(['\uFEFF' + csvRows], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `reporte_financiero_${getTodayString()}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // 5. Guardar
+    const wb = utils.book_new();
+    utils.book_append_sheet(wb, ws, "Finanzas");
+    writeFile(wb, `Reporte_Financiero_${getTodayString()}.xlsx`);
   };
 
   // =========================================================
@@ -172,14 +219,12 @@ function ExpenseManager({ token, onLogout }) {
     const val = parseFloat(newLimitValue);
     if (isNaN(val) || val < 0) return alert('Ingresa un número válido');
 
-    // Usamos la nueva ruta del backend para actualizar el presupuesto específico
     const res = await authedFetch(`${API_URL}/budgets/${activeBudget.id}`, {
         method: 'PUT',
         body: JSON.stringify({ limit_amount: val })
     });
 
     if (res && res.ok) {
-        // Recargamos el contexto para que se actualice la barra visualmente
         fetchBudgets(token); 
         setIsEditingLimit(false);
     } else {
@@ -189,7 +234,6 @@ function ExpenseManager({ token, onLogout }) {
 
   // === CARGA DE DATOS ===
   const fetchFilteredExpenses = async () => {
-    // Construimos la URL con parámetros para que el backend filtre (más eficiente)
     let url = `${API_URL}/expenses`;
     const params = new URLSearchParams();
     if (startDate) params.append('startDate', startDate);
@@ -211,7 +255,6 @@ function ExpenseManager({ token, onLogout }) {
     if (res.ok) {
         let data = await res.json();
         data = Array.isArray(data) ? data : [];
-        // Filtro manual para ingresos
         if (startDate && endDate) {
             data = data.filter(item => {
                 const itemDate = getDateString(item.date || item.created_at);
@@ -252,7 +295,7 @@ function ExpenseManager({ token, onLogout }) {
 
   const handleFilterDate = (e) => {
     e.preventDefault();
-    loadData(); // Reutilizamos loadData que ya lee startDate y endDate
+    loadData(); 
   };
 
   const clearFilters = () => {
@@ -274,7 +317,7 @@ function ExpenseManager({ token, onLogout }) {
     return sum + (parseFloat(e.amount) || 0);
   }, 0);
 
-  // === CÁLCULOS PARA BARRA DE PRESUPUESTO (Usando activeBudget) ===
+  // === CÁLCULOS PARA BARRA DE PRESUPUESTO ===
   const currentLimit = activeBudget ? parseFloat(activeBudget.limit_amount) : 0;
   const budgetPercentage = currentLimit > 0 ? (totalExp / currentLimit) * 100 : 0;
   
@@ -444,6 +487,8 @@ function ExpenseManager({ token, onLogout }) {
       {/* === SECCIÓN DE PRESUPUESTO ACTUAL === */}
       <div style={{ margin: '10px auto', maxWidth: '1000px', background: 'white', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+          
+          {/* AQUÍ ESTÁ LA CORRECCIÓN APLICADA: */}
           <h3 style={{margin:0}}>
               💰 {activeBudget?.name?.includes('Presupuesto') ? activeBudget.name : `Presupuesto ${activeBudget?.name || 'Actual'}`}
           </h3>
@@ -513,7 +558,7 @@ function ExpenseManager({ token, onLogout }) {
         </div>
       </div>
 
-      {/* FILTROS MANUALES (Sincronizados) */}
+      {/* FILTROS MANUALES */}
       <div className="filters-container">
           <strong>📅 Rango de Fechas:</strong>
           <input type="date" className="date-input" value={startDate} onChange={e => setStartDate(e.target.value)} />
