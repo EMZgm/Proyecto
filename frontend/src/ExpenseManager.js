@@ -445,7 +445,7 @@ function ExpenseManager({ token, onLogout }) {
       <div style={{ margin: '10px auto', maxWidth: '1000px', background: 'white', padding: '15px', borderRadius: '8px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
           <h3 style={{margin:0}}>
-              💰 Presupuesto {activeBudget?.name || (activeBudget?.type === 'daily' ? 'Diario' : activeBudget?.type === 'weekly' ? 'Semanal' : activeBudget?.type === 'yearly' ? 'Anual' : 'Mensual')}
+              💰 {activeBudget?.name?.includes('Presupuesto') ? activeBudget.name : `Presupuesto ${activeBudget?.name || 'Actual'}`}
           </h3>
           
           {isEditingLimit ? (
