@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ExpensesChart from './ExpensesChart';
-
+//pequeño cambio
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
 
 function ExpenseManager({ token, onLogout }) {
