@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const API_URL = process.env.REACT_APP_API_URL;
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
 
 // Este componente maneja tanto el Login como el Registro
 function AuthPage({ onLoginSuccess }) {

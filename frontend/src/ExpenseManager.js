@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ExpensesChart from './ExpensesChart';
 
-const API_URL = process.env.REACT_APP_API_URL;
+const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
 
 function ExpenseManager({ token, onLogout }) {
   const [view, setView] = useState('dashboard');
