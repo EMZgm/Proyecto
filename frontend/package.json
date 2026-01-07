@@ -1,6 +1,7 @@
 {
   "name": "gestor-gastos-frontend",
   "version": "1.0.0",
+  "homepage": ".",
   "private": true,
   "dependencies": {
     "chart.js": "^4.5.1",
