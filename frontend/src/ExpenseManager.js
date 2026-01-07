@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ExpensesChart from './ExpensesChart';
 import BudgetSelector from './BudgetSelector'; // <--- 1. IMPORTAMOS EL SELECTOR
-import { useBudget } from '../context/BudgetContext'; // <--- 2. IMPORTAMOS EL CONTEXTO
+import { useBudget } from './BudgetContext';
 
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
 
